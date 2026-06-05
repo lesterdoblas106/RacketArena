@@ -22,6 +22,7 @@ const skillBorderClass = (skill: Member['skill']) =>
     Beginner: 'skill-beginner',
     'Low Intermediate': 'skill-low-intermediate',
     Intermediate: 'skill-intermediate',
+    'High Intermediate': 'skill-high-intermediate',
     Advanced: 'skill-advanced',
     Elite: 'skill-elite',
   })[skill]
@@ -31,6 +32,7 @@ const skillBorderClass = (skill: Member['skill']) =>
     Beginner: '#fde047',
     'Low Intermediate': '#22c55e',
     Intermediate: '#3b82f6',
+    'High Intermediate': '#8b5cf6',
     Advanced: '#ef4444',
     Elite: '#111827',
   })[skill]
@@ -68,70 +70,87 @@ export function MembersPage({
       .filter(Boolean)
     if (!lines.length) return
 
-    onAddMembersBulk(lines, 'Low Intermediate')
+    onAddMembersBulk(lines, 'Intermediate')
     setBulkMembersText('')
     setBulkModalOpen(false)
   }
 
   return (
     <section className="members-page">
-      <div className="section-title">
-        <div className="actions">
-          <button
-            className="ghost small"
-            onClick={() => {
-              setBulkMembersText('')
-              setBulkModalOpen(true)
-            }}
-          >
-            Bulk Add
-          </button>
-          <button
-            className="primary small"
-            onClick={() => setMemberModal({ name: '', skill: 'Intermediate' })}
-          >
-            Add Member
-          </button>
-        </div>
+    <div className="section-title members-header">
+      <div className="actions">
+        <button
+          className="ghost small"
+          onClick={() => {
+            setBulkMembersText('')
+            setBulkModalOpen(true)
+          }}
+        >
+          Bulk Add
+        </button>
 
-        <label>
-          Sort:
+        <button
+          className="primary small"
+          onClick={() => setMemberModal({ name: '', skill: 'Intermediate' })}
+        >
+          Add Member
+        </button>
+      </div>
+    </div>
+
+
+      <div className="grid-two">
+        <article className="card member-section-card">
+        <div className="member-card-header">
+          <h4>Currently Playing ({session.playingIds.length})</h4>
+
           <select
             value={playingSort}
             onChange={(e) => onChangeSort(e.target.value as typeof playingSort)}
           >
-            <option value="arrival">Arrival Time</option>
-            <option value="games">Games Played</option>
+            <option value="arrival">Arrival</option>
+            <option value="games">Games</option>
             <option value="wins">Wins</option>
-            <option value="skill">Skill Level</option>
+            <option value="skill">Skill</option>
             <option value="name">Name</option>
             <option value="queue">Queue</option>
           </select>
-        </label>
-      </div>
+        </div>
 
-      <div className="grid-two">
-        <article className="card member-section-card">
-          <h4>Currently Playing ({session.playingIds.length})</h4>
           <div className="list">
             {activePlayingMembers.map((memberId) => {
               const stats = session.stats[memberId]
               return (
                 <div
                   key={memberId}
-                  className={`row row-table row-skill ${skillBorderClass(memberById[memberId].skill)}`}
+                  className={`row row-skill ${skillBorderClass(memberById[memberId].skill)}`}
                 >
-                  <div className="row-col-name">
+                  <div className="compact-player-row">
                     <strong>{memberById[memberId].name}</strong>
-                  </div>
-                  <div className="row-col-skill">{memberById[memberId].skill}</div>
-                  <div className="row-col-stats">
-                    <span>G:{stats.gamesPlayed}</span>
-                    <span>W:{stats.wins}</span>
-                  </div>
-                  <div className="row-col-action">
-                    <button className="danger" onClick={() => onResign(memberId)}>
-                      Resign
+
+                    <div className="compact-player-meta">
+                      <span className="compact-skill">
+                        {memberById[memberId].skill}
+                      </span>
+
+                      <span className="compact-stats">
+                        G:{stats.gamesPlayed} W:{stats.wins}
+                        {session.stats[memberId].missedGames > 0 ? `  M:${session.stats[memberId].missedGames}` : ''}
+                      </span>
+                    </div>
+
+                    <button
+                      className="danger small"
+                      onClick={() => onResign(memberId)}
+                      title='Resign'
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" 
+                      viewBox="0 0 20 20" fill="currentColor"
+                      style={{ width: '15px', height: '15px' }} 
+                      className="size-5">
+                        <path d="M11 5a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM2.046 15.253c-.058.468.172.92.57 1.175A9.953 9.953 0 0 0 8 18c1.982 0 3.83-.578 5.384-1.573.398-.254.628-.707.57-1.175a6.001 6.001 0 0 0-11.908 0ZM12.75 7.75a.75.75 0 0 0 0 1.5h5.5a.75.75 0 0 0 0-1.5h-5.5Z" />
+                      </svg>
+                      
                     </button>
                   </div>
                 </div>
@@ -147,19 +166,35 @@ export function MembersPage({
               .map((memberId) => (
                 <div
                   key={memberId}
-                  className={`row row-table row-skill ${skillBorderClass(memberById[memberId].skill)}`}
+                  className={`row row-skill ${skillBorderClass(memberById[memberId].skill)}`}
                 >
-                  <div className="row-col-name">
+                  <div className="compact-player-row">
                     <strong>{memberById[memberId].name}</strong>
-                  </div>
-                  <div className="row-col-skill">{memberById[memberId].skill}</div>
-                  <div className="row-col-stats">
-                    <span>G:{session.stats[memberId].gamesPlayed}</span>
-                    <span>W:{session.stats[memberId].wins}</span>
-                  </div>
-                  <div className="row-col-action">
-                    <button className="play" onClick={() => onMoveToPlaying(memberId)}>
-                      Play
+
+                    <div className="compact-player-meta">
+                      <span className="compact-skill">
+                        {memberById[memberId].skill}
+                      </span>
+
+                      <span className="compact-stats">
+                        G:{session.stats[memberId].gamesPlayed} W:{session.stats[memberId].wins}
+                        {session.stats[memberId].missedGames > 0 ? `  M:${session.stats[memberId].missedGames}` : ''}
+                      </span>
+                      
+                    </div>
+
+                    <button
+                      className="play small"
+                      onClick={() => onMoveToPlaying(memberId)}
+                      title='Move to Playing'
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" 
+                      viewBox="0 0 20 20" fill="currentColor"                       
+                      style={{ width: '15px', height: '15px' }} 
+                      className="size-5">
+                      <path d="M10 5a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM1.615 16.428a1.224 1.224 0 0 1-.569-1.175 6.002 6.002 0 0 1 11.908 0c.058.467-.172.92-.57 1.174A9.953 9.953 0 0 1 7 18a9.953 9.953 0 0 1-5.385-1.572ZM16.25 5.75a.75.75 0 0 0-1.5 0v2h-2a.75.75 0 0 0 0 1.5h2v2a.75.75 0 0 0 1.5 0v-2h2a.75.75 0 0 0 0-1.5h-2v-2Z" />
+                    </svg>
+
                     </button>
                   </div>
                 </div>
@@ -175,7 +210,7 @@ export function MembersPage({
         submitLabel="Add All"
       >
         <label className="field">
-          One member per line (default skill: Low Intermediate)
+          One member per line (default skill: Intermediate)
           <textarea
             className="bulk-textarea"
             value={bulkMembersText}

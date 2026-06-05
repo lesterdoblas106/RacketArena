@@ -3,6 +3,7 @@ export type Skill =
   | 'Beginner'
   | 'Low Intermediate'
   | 'Intermediate'
+  | 'High Intermediate'
   | 'Advanced'
   | 'Elite'
 
@@ -24,7 +25,8 @@ export type MemberStats = {
 export type Roster = {
   id: string
   playerIds: string[]
-  previousOrder: string[]
+  baseOrder: string[], 
+  rotationIndex: number,
   createdAt: string
 }
 
@@ -61,6 +63,32 @@ export type Session = {
   history: MatchHistory[]
   stats: Record<string, MemberStats>
   arrivalCounter: number
+  sessionHistory: SessionHistory[]
+}
+
+export type SessionHistory = {
+  id: string
+
+  title: string
+
+  createdAt: string
+  endedAt: string
+
+  totalMatches: number
+  totalPlayers: number
+
+  rankings: {
+    memberId: string
+    skillLevel: Member['skill'] 
+    totalGames: number
+    wins: number
+    losses: number
+    missedGames: number
+    gamesPlayed: number
+    winRate: number
+  }[]
+
+  matches: MatchHistory[]
 }
 
 export type Page = 'landing' | 'club' | 'members' | 'queue' | 'ranking' | 'history'
@@ -70,6 +98,7 @@ export const skillOrder: Skill[] = [
   'Beginner',
   'Low Intermediate',
   'Intermediate',
+  'High Intermediate',
   'Advanced',
   'Elite',
 ]
@@ -124,4 +153,5 @@ export const createSession = (name: string, members: Member[]): Session => ({
   history: [],
   stats: buildDefaultStats(members),
   arrivalCounter: 0,
+  sessionHistory: [],
 })

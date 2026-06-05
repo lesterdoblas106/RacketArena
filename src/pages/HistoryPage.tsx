@@ -4,9 +4,16 @@ import { useMemo, useState } from 'react'
 type HistoryPageProps = {
   session: Session
   memberById: Record<string, Member>
+  exportSessionCSV: (history: any, memberById: Record<string, Member>) => void
+  endSession: () => void
 }
 
-export function HistoryPage({ session, memberById }: HistoryPageProps) {
+export function HistoryPage({ 
+  session, 
+  memberById, 
+  exportSessionCSV, 
+  endSession }: 
+  HistoryPageProps) {
   const [playerFilter, setPlayerFilter] = useState('')
 
   const history = useMemo(() => {
@@ -48,14 +55,25 @@ export function HistoryPage({ session, memberById }: HistoryPageProps) {
           <p>{history.length} completed matches</p>
         </div>
 
-        <input
-          type="text"
-          placeholder="Filter by player name..."
-          value={playerFilter}
-          onChange={(e) =>
-            setPlayerFilter(e.target.value)
-          }
-        />
+        <div className="history-toolbar">
+          <button className="danger small" onClick={endSession} > End Session </button>
+          <button
+            className="primary small"
+            onClick={() =>
+              exportSessionCSV(history, memberById)
+            }
+          >
+            Export CSV
+          </button>
+          <input
+            type="text"
+            placeholder="Filter by player name..."
+            value={playerFilter}
+            onChange={(e) =>
+              setPlayerFilter(e.target.value)
+            }
+          />
+        </div>
       </div>
 
       <div className="list">

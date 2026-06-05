@@ -25,6 +25,7 @@ const skillBorderClass = (skill: Skill) =>
     Beginner: 'skill-beginner',
     'Low Intermediate': 'skill-low-intermediate',
     Intermediate: 'skill-intermediate',
+    'High Intermediate': 'skill-high-intermediate',
     Advanced: 'skill-advanced',
     Elite: 'skill-elite',
   })[skill]
@@ -35,6 +36,7 @@ const skillColor = (skill: Skill) =>
     Beginner: '#fde047',
     'Low Intermediate': '#22c55e',
     Intermediate: '#3b82f6',
+    'High Intermediate': '#8b5cf6',
     Advanced: '#ef4444',
     Elite: '#111827',
   })[skill]
@@ -134,7 +136,7 @@ export function ClubPage({
       .map((line) => line.trim())
       .filter(Boolean)
     if (!lines.length) return
-    onAddMembersBulk(lines, 'Low Intermediate')
+    onAddMembersBulk(lines, 'Intermediate')
     setBulkMembersText('')
     setBulkModalOpen(false)
   }
@@ -144,15 +146,7 @@ export function ClubPage({
       <article className="card">
         <div className="section-title">
           <h3>Queue History</h3>
-          <button
-            className="primary small"
-            onClick={() => {
-              setQueueName('')
-              setCreateQueueOpen(true)
-            }}
-          >
-            + New Queue
-          </button>
+          
         </div>
         <div className="toolbar">
           <label>
@@ -332,7 +326,7 @@ export function ClubPage({
         submitLabel="Add All"
       >
         <label className="field">
-          One member per line (default skill: Low Intermediate)
+          One member per line (default skill: Intermediate)
           <textarea
             className="bulk-textarea"
             value={bulkMembersText}

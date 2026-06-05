@@ -51,6 +51,9 @@ function App() {
     toggleManualPick,
     shuffleRoster,
     buildQueueList,
+    forfeitMatch,
+    exportSessionCSV,
+    endSession,
   } = useRacketArenaState()
   const [rankingSort, setRankingSort] = useState<'winRate' | 'games' | 'name' | 'skill'>(
     'winRate',
@@ -166,6 +169,7 @@ function App() {
                     skillScore={skillScore}
                     onShuffleRoster={shuffleRoster}
                     buildQueueList={buildQueueList}
+                    forfeitMatch={forfeitMatch}
                   />
                 ) : (
                   <Navigate to="/club" />
@@ -193,7 +197,7 @@ function App() {
               path="/history"
               element={
                 activeSession ? (
-                  <HistoryPage session={activeSession} memberById={memberById} />
+                  <HistoryPage session={activeSession} memberById={memberById} exportSessionCSV={exportSessionCSV} endSession={endSession} />
                 ) : (
                   <Navigate to="/club" />
                 )

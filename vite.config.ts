@@ -10,13 +10,13 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: [
         'favicon.svg',
-        'pwa-192x192.png',
-        'pwa-512x512.png',
-        'apple-touch-icon.png',
+        'web-app-manifest-192x192.png',
+        'web-app-manifest-512x512.png',
+        'logo.png',
       ],
       manifest: {
-        name: 'Badminton Queue',
-        short_name: 'BadmintonQueue',
+        name: 'Racket Arena',
+        short_name: 'Racket Arena',
         description:
           'Queue players and manage court rotation for badminton sessions.',
         theme_color: '#0d9488',
@@ -27,19 +27,19 @@ export default defineConfig({
         start_url: '/',
         icons: [
           {
-            src: 'pwa-192x192.png',
+            src: 'web-app-manifest-192x192.png',
             sizes: '192x192',
             type: 'image/png',
             purpose: 'any',
           },
           {
-            src: 'pwa-512x512.png',
+            src: 'web-app-manifest-512x512.png',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any',
           },
           {
-            src: 'pwa-512x512.png',
+            src: 'web-app-manifest-512x512.png',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'maskable',

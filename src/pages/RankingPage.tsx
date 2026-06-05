@@ -10,6 +10,16 @@ type RankingPageProps = {
   skillFilter: Skill | 'all'
   onSkillFilter: (value: Skill | 'all') => void
 }
+const skillBorderClass = (skill: Member['skill']) =>
+  ({
+    Newbie: 'skill-newbie',
+    Beginner: 'skill-beginner',
+    'Low Intermediate': 'skill-low-intermediate',
+    Intermediate: 'skill-intermediate',
+    'High Intermediate': 'skill-high-intermediate',
+    Advanced: 'skill-advanced',
+    Elite: 'skill-elite',
+  })[skill]
 
 export function RankingPage({
   session,
@@ -65,6 +75,7 @@ export function RankingPage({
               <option value="Beginner">Beginner</option>
               <option value="Low Intermediate">Low Intermediate</option>
               <option value="Intermediate">Intermediate</option>
+              <option value="High Intermediate">High Intermediate</option>
               <option value="Advanced">Advanced</option>
               <option value="Elite">Elite</option>
             </select>
@@ -73,31 +84,53 @@ export function RankingPage({
       </div>
 
       <div className="rank-table-wrapper">
-        <table className="rank-table">
+        <table className="leaderboard-table">
           <thead>
             <tr>
-              <th>Rank</th>
-              <th>Name</th>
-              <th>Skill</th>
-              <th>Games</th>
-              <th>Winrate</th>
+              <th className="rank-col">#</th>
+              <th className="player-col">Player</th>
+              <th>W</th>
+              <th>L</th>
+              <th>G</th>
+              <th>WR</th>
             </tr>
           </thead>
 
           <tbody>
-            {playingMembers.map((entry, index) => (
-              <tr key={entry.id} className="rank-table-row">
-                <td className="rank-table-cell rank-table-rank">#{index + 1}</td>
-                <td className="rank-table-cell">{entry.member.name}</td>
-                <td className="rank-table-cell">{entry.member.skill}</td>
-                <td className="rank-table-cell rank-table-number">{entry.stats.gamesPlayed}</td>
-                <td className="rank-table-cell rank-table-number">
-                  {entry.winRate.toFixed(1)}%
-                </td>
-              </tr>
-            ))}
+            {playingMembers.map((entry, index) => {
+              const losses = entry.stats.gamesPlayed - entry.stats.wins
+
+              return (
+                <tr
+                  key={entry.id}
+                  className={`leaderboard-row ${skillBorderClass(entry.member.skill)}`}
+                >
+                  <td className="leaderboard-rank">
+                    {index === 0
+                      ? '🥇'
+                      : index === 1
+                        ? '🥈'
+                        : index === 2
+                          ? '🥉'
+                          : `#${index + 1}`}
+                  </td>
+
+                  <td className="leaderboard-player">
+                    <strong>{entry.member.name}</strong>
+                  </td>
+
+                  <td>{entry.stats.wins}</td>
+
+                  <td>{losses}</td>
+
+                  <td>{entry.stats.gamesPlayed}</td>
+
+                  <td>{entry.winRate.toFixed(1)}%</td>
+                </tr>
+              )
+            })}
           </tbody>
-        </table>
+</table>
       </div>
     </section>
   )
