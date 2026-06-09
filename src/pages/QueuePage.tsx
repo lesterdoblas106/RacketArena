@@ -13,10 +13,11 @@ type QueuePageProps = {
   ) => void
   onAddCourt: () => void
   onRemoveCourt: (courtId: string) => void
+  onRenameCourt: (courtId: string, name: string) => void
   onEndMatch: (courtId: string, scoreA: number, scoreB: number) => void
   onGenerateRoster: () => void
   onQueueManualRoster: () => void
-  onAssignToCourt: (rosterId: string) => void
+  onAssignToCourt: (rosterId: string, courtId?: string) => void
   onDissolveRoster: (rosterId: string) => void
   onReplaceRosterPlayer: (rosterId: string, slotIndex: number, memberId: string) => void
   onToggleManualPick: (memberId: string) => void
@@ -38,6 +39,7 @@ export function QueuePage({
   onChangePlayersSort,
   onAddCourt,
   onRemoveCourt,
+  onRenameCourt,
   onEndMatch,
   onGenerateRoster,
   onQueueManualRoster,
@@ -66,6 +68,10 @@ export function QueuePage({
     slotIndex: number
     currentMemberId: string
   } | null>(null)
+  const [courtSelectionModal, setCourtSelectionModal] = useState<{
+    rosterId: string
+    availableCourts: string[]
+  } | null>(null)
 
   const skillBorderClass = (skill: Member['skill']) =>
     ({
@@ -77,6 +83,24 @@ export function QueuePage({
       Advanced: 'skill-advanced',
       Elite: 'skill-elite',
     })[skill]
+
+  const getVacantCourts = () => {
+    return session.courts.filter(
+      (court) => court.teamA.length === 0 && court.teamB.length === 0
+    ).map(c => c.id)
+  }
+
+  const handlePlayClick = (rosterId: string) => {
+    const vacantCourts = getVacantCourts()
+    if (vacantCourts.length >= 2) {
+      setCourtSelectionModal({
+        rosterId,
+        availableCourts: vacantCourts,
+      })
+    } else if (vacantCourts.length === 1) {
+      onAssignToCourt(rosterId)
+    }
+  }
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 1000)
@@ -118,6 +142,17 @@ export function QueuePage({
     const seconds = String(Math.floor((elapsed % 60000) / 1000)).padStart(2, '0')
     return `${minutes}:${seconds}`
   }
+
+  const getTeamSkillTotal = (playerIds: string[]) =>
+    playerIds.reduce((total, memberId) => {
+      const member = memberById[memberId]
+
+      if (!member) {
+        return total
+      }
+
+      return total + skillScore(member.skill) + 1
+    }, 0)
 
 const getTotalGames = (
   stats: MemberStats,
@@ -243,7 +278,18 @@ const getSortedPlayers = () => {
           {session.courts.map((court, idx) => (
             <div key={court.id} className="court">
               <div className="section-title">
-                <strong>Court {idx + 1}</strong>
+                <input
+                  className="court-name-input"
+                  aria-label={`Court ${idx + 1} name`}
+                  value={court.name ?? `Court ${idx + 1}`}
+                  onChange={(event) => onRenameCourt(court.id, event.target.value)}
+                  onBlur={(event) =>
+                    onRenameCourt(
+                      court.id,
+                      event.target.value.trim() || `Court ${idx + 1}`,
+                    )
+                  }
+                />
                 {court.teamA.length === 0 && court.teamB.length === 0 && (
                   <button
                   className="icon-btn remove-btn" 
@@ -281,7 +327,7 @@ const getSortedPlayers = () => {
                       onClick={() =>
                         setResultModal({
                           courtId: court.id,
-                          courtLabel: `Court ${idx + 1}`,
+                          courtLabel: court.name || `Court ${idx + 1}`,
                           startedAt: court.startedAt,
                           teamA: [...court.teamA],
                           teamB: [...court.teamB],
@@ -313,45 +359,59 @@ const getSortedPlayers = () => {
           <h3>Match Making</h3>
         </div>
         <div className="court-grid">
-          {session.rosters.map((roster, idx) => (
+          {session.rosters.map((roster, idx) => {
+            const teamAIds = roster.playerIds.slice(0, 2)
+            const teamBIds = roster.playerIds.slice(2, 4)
+
+            return (
             <div key={roster.id} className="queue-card">
-              <strong>Queue {idx + 1}</strong> 
+              <strong>Queue {idx + 1}</strong>
                           
             <div className="compact-roster-lines">
               <div className="roster-line team-a">
-                {roster.playerIds.slice(0, 2).map((memberId, slotIndex) => (
-                  <button
-                    key={`${roster.id}-${memberId}-${slotIndex}`}
-                    className="link-btn compact-roster-player"
-                    onClick={() =>
-                      setReplaceModal({
-                        rosterId: roster.id,
-                        slotIndex,
-                        currentMemberId: memberId,
-                      })
-                    }
-                  >
-                    {memberById[memberId]?.name ?? 'Unknown'}
-                  </button>
-                )).reduce((prev, curr) => [prev, ' - ', curr] as any)}
+                <div className="roster-team-players">
+                  {teamAIds.map((memberId, slotIndex) => (
+                    <button
+                      key={`${roster.id}-${memberId}-${slotIndex}`}
+                      className="link-btn compact-roster-player"
+                      onClick={() =>
+                        setReplaceModal({
+                          rosterId: roster.id,
+                          slotIndex,
+                          currentMemberId: memberId,
+                        })
+                      }
+                    >
+                      {memberById[memberId]?.name ?? 'Unknown'}
+                    </button>
+                  )).reduce((prev, curr) => [prev, ' - ', curr] as any)}
+                </div>
+                <span className="team-skill-total" title="Team skill total">
+                  {getTeamSkillTotal(teamAIds)}
+                </span>
               </div>
 
               <div className="roster-line team-b">
-                {roster.playerIds.slice(2, 4).map((memberId, slotIndex) => (
-                  <button
-                    key={`${roster.id}-${memberId}-${slotIndex + 2}`}
-                    className="link-btn compact-roster-player"
-                    onClick={() =>
-                      setReplaceModal({
-                        rosterId: roster.id,
-                        slotIndex: slotIndex + 2,
-                        currentMemberId: memberId,
-                      })
-                    }
-                  >
-                    {memberById[memberId]?.name ?? 'Unknown'}
-                  </button>
-                )).reduce((prev, curr) => [prev, ' - ', curr] as any)}
+                <div className="roster-team-players">
+                  {teamBIds.map((memberId, slotIndex) => (
+                    <button
+                      key={`${roster.id}-${memberId}-${slotIndex + 2}`}
+                      className="link-btn compact-roster-player"
+                      onClick={() =>
+                        setReplaceModal({
+                          rosterId: roster.id,
+                          slotIndex: slotIndex + 2,
+                          currentMemberId: memberId,
+                        })
+                      }
+                    >
+                      {memberById[memberId]?.name ?? 'Unknown'}
+                    </button>
+                  )).reduce((prev, curr) => [prev, ' - ', curr] as any)}
+                </div>
+                <span className="team-skill-total" title="Team skill total">
+                  {getTeamSkillTotal(teamBIds)}
+                </span>
               </div>
             </div>
               {/* Buttons */}
@@ -378,7 +438,7 @@ const getSortedPlayers = () => {
                 </button>
 
                 {/* Play */}
-                <button className="play" onClick={() => onAssignToCourt(roster.id)}
+                <button className="play" onClick={() => handlePlayClick(roster.id)}
                   title='Assign to Court'>
                   <svg xmlns="http://www.w3.org/2000/svg" 
                   viewBox="0 0 20 20" 
@@ -392,7 +452,8 @@ const getSortedPlayers = () => {
                 
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
         
           <div className="actions generate-row">
@@ -435,10 +496,14 @@ const getSortedPlayers = () => {
             <div className="queue-player-top">
               <strong>{memberById[memberId].name}</strong>
 
-              <span className="queue-player-stats">                
-                  G:{stats.gamesPlayed}  W:{stats.wins}
-                  {stats.missedGames > 0 ? `  M:${stats.missedGames}` : ''}
-              </span>
+              {manualPickIds.includes(memberId) ? (
+                <span className="queue-selected-badge">Selected</span>
+              ) : (
+                <span className="queue-player-stats">                
+                    G:{stats.gamesPlayed}  W:{stats.wins}
+                    {stats.missedGames > 0 ? `  M:${stats.missedGames}` : ''}
+                </span>
+              )}
             </div>
 
             <div className="queue-player-bottom">
@@ -465,17 +530,14 @@ const getSortedPlayers = () => {
         <div className="list">
           {[...session.playingIds]
             .filter((memberId) => {
-              const onCourt = session.courts.some((court) =>
-                [...court.teamA, ...court.teamB].includes(memberId),
+              const usedInRoster = session.rosters.some(
+                (roster) => roster.playerIds.includes(memberId),
               )
-              if (onCourt) return false
-              const usedInOtherRoster = session.rosters.some(
-                (roster) =>
-                  roster.id !== replaceModal?.rosterId &&
-                  roster.playerIds.includes(memberId),
-              )
-              return !usedInOtherRoster
+              return memberId === replaceModal?.currentMemberId || !usedInRoster
             })
+            .sort((a, b) =>
+              (memberById[a]?.name ?? '').localeCompare(memberById[b]?.name ?? ''),
+            )
             .map((memberId) => (
               <button
                 key={memberId}
@@ -667,6 +729,31 @@ const getSortedPlayers = () => {
 
           </div>
         )}
+      </Modal>
+
+      <Modal
+        open={Boolean(courtSelectionModal)}
+        title="Select Court"
+        onClose={() => setCourtSelectionModal(null)}
+      >
+        <div className="list">
+          {courtSelectionModal?.availableCourts.map((courtId) => {
+            const court = session.courts.find((c) => c.id === courtId)
+            return (
+              <button
+                key={courtId}
+                className="row"
+                onClick={() => {
+                  if (!courtSelectionModal) return
+                  onAssignToCourt(courtSelectionModal.rosterId, courtId)
+                  setCourtSelectionModal(null)
+                }}
+              >
+                <span>{court?.name ?? 'Unknown Court'}</span>
+              </button>
+            )
+          })}
+        </div>
       </Modal>
       
       {manualPickIds.length === 4 && (

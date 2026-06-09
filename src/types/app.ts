@@ -18,6 +18,7 @@ export type MemberStats = {
   wins: number
   missedGames: number
   joinedAt: number
+  joinedAtTime?: number
   waitingSince: number
   
 }
@@ -32,6 +33,7 @@ export type Roster = {
 
 export type Court = {
   id: string
+  name: string
   teamA: string[]
   teamB: string[]
   scoreA: number
@@ -47,7 +49,16 @@ export type MatchHistory = {
   scoreA: number
   scoreB: number
   result: 'teamA' | 'teamB' | 'draw'
+  startedAt?: number | null
   endedAt: number
+  durationMs?: number
+  waitingRecords?: {
+    memberId: string
+    waitingStartedAt: number
+    matchStartedAt: number
+    waitingMs: number
+    gameNumber: number
+  }[]
 }
 
 export type Session = {
@@ -91,7 +102,14 @@ export type SessionHistory = {
   matches: MatchHistory[]
 }
 
-export type Page = 'landing' | 'club' | 'members' | 'queue' | 'ranking' | 'history'
+export type Page =
+  | 'landing'
+  | 'club'
+  | 'members'
+  | 'queue'
+  | 'ranking'
+  | 'history'
+  | 'payment'
 
 export const skillOrder: Skill[] = [
   'Newbie',
@@ -104,17 +122,7 @@ export const skillOrder: Skill[] = [
 ]
 
 export const seedMembers: Member[] = [
-  { id: 'm1', name: 'Lester', skill: 'Low Intermediate' },
-  { id: 'm2', name: 'Kim', skill: 'Intermediate' },
-  { id: 'm3', name: 'Lloyd', skill: 'Advanced' },
-  { id: 'm4', name: 'David', skill: 'Intermediate' },
-  { id: 'm5', name: 'Xian', skill: 'Low Intermediate' },
-  { id: 'm6', name: 'Lara', skill: 'Beginner' },
-  { id: 'm7', name: 'Fluke', skill: 'Intermediate' },
-  { id: 'm8', name: 'Marc', skill: 'Advanced' },
-  { id: 'm9', name: 'Kevin', skill: 'Intermediate' },
-  { id: 'm10', name: 'Ciara', skill: 'Low Intermediate' },
-  { id: 'm11', name: 'Moi', skill: 'Beginner' },
+  { id: 'm1', name: 'Lester', skill: 'Intermediate' },
 ]
 
 export const buildDefaultStats = (
@@ -126,6 +134,7 @@ export const buildDefaultStats = (
       wins: 0,
       missedGames: 0,
       joinedAt: index + 1,
+      joinedAtTime: Date.now(),
       waitingSince: Date.now(),
     }
     return acc
@@ -143,6 +152,7 @@ export const createSession = (name: string, members: Member[]): Session => ({
   courts: [
     {
       id: crypto.randomUUID(),
+      name: 'Court 1',
       teamA: [],
       teamB: [],
       scoreA: 0,

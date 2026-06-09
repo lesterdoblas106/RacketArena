@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { ModalForm } from '../components/Modal'
+import { Modal, ModalForm } from '../components/Modal'
 import { skillOrder, type Member, type Session, type Skill } from '../types/app'
 
 type MembersPageProps = {
@@ -54,6 +54,10 @@ export function MembersPage({
   const [memberModal, setMemberModal] = useState<{ name: string; skill: Skill } | null>(null)
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [bulkMembersText, setBulkMembersText] = useState('')
+  const [resignModal, setResignModal] = useState<{
+    memberId: string
+    label: string
+  } | null>(null)
 
   const submitMember = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -141,7 +145,12 @@ export function MembersPage({
 
                     <button
                       className="danger small"
-                      onClick={() => onResign(memberId)}
+                      onClick={() =>
+                        setResignModal({
+                          memberId,
+                          label: memberById[memberId].name,
+                        })
+                      }
                       title='Resign'
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" 
@@ -210,12 +219,17 @@ export function MembersPage({
         submitLabel="Add All"
       >
         <label className="field">
-          One member per line (default skill: Intermediate)
+          One member per line
+          <div className="bulk-help">
+            Add a skill number after the name: 1 Newbie, 2 Beginner, 3 Low
+            Intermediate, 4 Intermediate, 5 High Intermediate, 6 Advanced, 7
+            Elite. No number defaults to Intermediate.
+          </div>
           <textarea
             className="bulk-textarea"
             value={bulkMembersText}
             onChange={(event) => setBulkMembersText(event.target.value)}
-            placeholder={'Alex\nBrent\nCara\nDale'}
+            placeholder={'Anthony 3\nBawaw 5\nJohn'}
             required
           />
         </label>
@@ -261,6 +275,29 @@ export function MembersPage({
           </select>
         </label>
       </ModalForm>
+
+      <Modal
+        open={Boolean(resignModal)}
+        title="Resign Player?"
+        onClose={() => setResignModal(null)}
+        footer={
+          <>
+            <button onClick={() => setResignModal(null)}>Cancel</button>
+            <button
+              className="danger"
+              onClick={() => {
+                if (!resignModal) return
+                onResign(resignModal.memberId)
+                setResignModal(null)
+              }}
+            >
+              Resign
+            </button>
+          </>
+        }
+      >
+        <p>Move "{resignModal?.label}" back to non-playing members?</p>
+      </Modal>
     </section>
   )
 }

@@ -4,15 +4,13 @@ import { useMemo, useState } from 'react'
 type HistoryPageProps = {
   session: Session
   memberById: Record<string, Member>
-  exportSessionCSV: (history: any, memberById: Record<string, Member>) => void
-  endSession: () => void
+  exportSessionCSV: (session: Session, memberById: Record<string, Member>) => void
 }
 
 export function HistoryPage({ 
   session, 
   memberById, 
-  exportSessionCSV, 
-  endSession }: 
+  exportSessionCSV }: 
   HistoryPageProps) {
   const [playerFilter, setPlayerFilter] = useState('')
 
@@ -56,11 +54,10 @@ export function HistoryPage({
         </div>
 
         <div className="history-toolbar">
-          <button className="danger small" onClick={endSession} > End Session </button>
           <button
             className="primary small"
             onClick={() =>
-              exportSessionCSV(history, memberById)
+              exportSessionCSV(session, memberById)
             }
           >
             Export CSV

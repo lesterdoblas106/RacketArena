@@ -22,8 +22,19 @@ export function useRacketArenaState() {
         sessions: persisted.sessions.map((session) => ({
           ...session,
           history: session.history ?? [],
-          courts: session.courts.map((court) => ({
+          stats: Object.fromEntries(
+            Object.entries(session.stats).map(([memberId, stats]) => [
+              memberId,
+              {
+                ...stats,
+                joinedAtTime:
+                  stats.joinedAtTime ?? new Date(session.createdAt).getTime(),
+              },
+            ]),
+          ),
+          courts: session.courts.map((court, courtIndex) => ({
             ...court,
+            name: court.name ?? `Court ${courtIndex + 1}`,
             startedAt: court.startedAt ?? null,
           })),
         })),
@@ -110,6 +121,7 @@ export function useRacketArenaState() {
             wins: 0,
             missedGames: 0,
             joinedAt: Object.keys(session.stats).length + 1,
+            joinedAtTime: Date.now(),
             waitingSince: Date.now(),
           },
         },
@@ -153,19 +165,37 @@ export function useRacketArenaState() {
     upsertStatsForNewMember(newMember.id)
   }
 
-  const addMembersBulk = (names: string[], defaultSkill: Skill = 'Low Intermediate') => {
+  const addMembersBulk = (names: string[], defaultSkill: Skill = 'Intermediate') => {
     const existingNameSet = new Set(members.map((member) => member.name.toLowerCase()))
-    const cleanedNames = names
-      .map((name) => name.trim())
-      .filter(Boolean)
-      .filter((name) => !existingNameSet.has(name.toLowerCase()))
-      .filter((name, index, array) => array.indexOf(name) === index)
-    if (!cleanedNames.length || !skillOrder.includes(defaultSkill)) return
+    if (!skillOrder.includes(defaultSkill)) return
 
-    const newMembers = cleanedNames.map((name) => ({
+    const cleanedMembers = names
+      .map((line) => {
+        const trimmedLine = line.trim()
+        const match = trimmedLine.match(/^(.*?)(?:\s+([1-7]))?$/)
+        const name = (match?.[1] ?? trimmedLine).trim()
+        const skillNumber = match?.[2] ? Number(match[2]) : null
+
+        return {
+          name,
+          skill: skillNumber ? skillOrder[skillNumber - 1] : defaultSkill,
+        }
+      })
+      .filter((member) => member.name)
+      .filter((member) => !existingNameSet.has(member.name.toLowerCase()))
+      .filter(
+        (member, index, array) =>
+          array.findIndex(
+            (item) => item.name.toLowerCase() === member.name.toLowerCase(),
+          ) === index,
+      )
+
+    if (!cleanedMembers.length) return
+
+    const newMembers = cleanedMembers.map((member) => ({
       id: crypto.randomUUID(),
-      name,
-      skill: defaultSkill,
+      name: member.name,
+      skill: member.skill,
     }))
 
     setMembers((prev) => [...prev, ...newMembers])
@@ -236,7 +266,7 @@ export function useRacketArenaState() {
         const playerTotalGames = getTotalGames(memberStats)
 
         const missedGames = Math.max(
-          0,
+          memberStats.missedGames,
           lowestTotalGames - playerTotalGames,
         )
 
@@ -381,8 +411,8 @@ const isCompatiblePlayer = (
       maxSkill = 3
       break
 
-    case 6:
-      minSkill = 4
+    case 7:
+      minSkill = 5
       break
 
     default:
@@ -425,6 +455,7 @@ const isCompatiblePlayer = (
 const buildMatchSet = (
   session: Session,
   queueList: string[],
+  preferredBasePlayerId?: string,
 ) => {
   if (queueList.length < 4) {
     return []
@@ -436,17 +467,28 @@ const buildMatchSet = (
     ),
   )
 
-  for (
-    let baseIndex = 0;
-    baseIndex < queueList.length;
-    baseIndex++
-  ) {
-    const basePlayer =
-      queueList[baseIndex]
+  const baseIndexes = queueList
+    .map((_, index) => index)
+    .sort((a, b) => {
+      if (!preferredBasePlayerId) {
+        return a - b
+      }
 
-    if (
-      queuedPlayers.has(basePlayer)
-    ) {
+      if (queueList[a] === preferredBasePlayerId) {
+        return -1
+      }
+
+      if (queueList[b] === preferredBasePlayerId) {
+        return 1
+      }
+
+      return a - b
+    })
+
+  for (const baseIndex of baseIndexes) {
+    const basePlayer = queueList[baseIndex]
+
+    if (queuedPlayers.has(basePlayer)) {
       continue
     }
 
@@ -455,20 +497,22 @@ const buildMatchSet = (
         session.stats[basePlayer],
       )
 
-    const startIndex =
-      baseTotalGames % 2 === 0
-        ? baseIndex + 1
-        : baseIndex + 2
+      const startIndex =
+        baseTotalGames % 2 === 0
+          ? baseIndex + 1
+          : baseIndex + 2
+      const comparedStartIndex =
+        basePlayer === preferredBasePlayerId ? 0 : startIndex
 
-    for (
-      let widenLevel = 0;
+      for (
+        let widenLevel = 0;
       widenLevel <= 4;
       widenLevel++
     ) {
       const waitSetArr = [basePlayer]
 
       for (
-        let i = startIndex;
+        let i = comparedStartIndex;
         i < queueList.length;
         i++
       ) {
@@ -489,14 +533,11 @@ const buildMatchSet = (
         }
 
         const compatible =
-          waitSetArr.every(
-            (existingPlayer) =>
-              isCompatiblePlayer(
-                session,
-                existingPlayer,
-                comparedPlayer,
-                widenLevel
-              )
+          isCompatiblePlayer(
+            session,
+            basePlayer,
+            comparedPlayer,
+            widenLevel,
           )
 
         if (compatible) {
@@ -571,9 +612,17 @@ const buildMatchSet = (
 
   
 
-  const generateRoster = () =>
+  const generateRoster = () => {
     updateActiveSession((session) => {
       const queueList = buildQueueList(session)
+      const queuedPlayers = new Set(
+        session.rosters.flatMap((roster) => roster.playerIds),
+      )
+      const selectedBasePlayerId = manualPickIds.find(
+        (memberId) =>
+          queueList.includes(memberId) &&
+          !queuedPlayers.has(memberId),
+      )
 
       const incompleteRosterIndex =
         session.rosters.findIndex(
@@ -615,8 +664,8 @@ const buildMatchSet = (
           ...incompleteRoster,
           playerIds: selectedPlayers,
 
-          baseOrder: incompleteRoster.baseOrder ?? selectedPlayers, 
-          rotationIndex: incompleteRoster.rotationIndex ?? 0,
+          baseOrder: selectedPlayers, 
+          rotationIndex: 0,
         }
 
         return {
@@ -628,6 +677,7 @@ const buildMatchSet = (
       const waitSetArr = buildMatchSet(
         session,
         queueList,
+        selectedBasePlayerId,
       )
 
       if (waitSetArr.length < 4) {
@@ -655,6 +705,8 @@ const buildMatchSet = (
         ],
       }
     })
+    setManualPickIds([])
+  }
   const rotateRosterOrder = (
       playerIds: string[],
     ): string[][] => {
@@ -745,15 +797,12 @@ const buildMatchSet = (
       if (!roster || slotIndex < 0 || slotIndex > 3) return session
       if (!session.playingIds.includes(memberId)) return session
 
-      const onCourtSet = new Set(
-        session.courts.flatMap((court) => [...court.teamA, ...court.teamB]),
-      )
-      if (onCourtSet.has(memberId)) return session
-
       const alreadyUsedInQueue = session.rosters.some(
-        (item) => item.id !== rosterId && item.playerIds.includes(memberId),
+        (item) => item.playerIds.includes(memberId),
       )
-      if (alreadyUsedInQueue) return session
+      if (alreadyUsedInQueue && roster.playerIds[slotIndex] !== memberId) {
+        return session
+      }
 
       const updatedPlayerIds = [...roster.playerIds]
       updatedPlayerIds[slotIndex] = memberId
@@ -762,7 +811,14 @@ const buildMatchSet = (
       return {
         ...session,
         rosters: session.rosters.map((item) =>
-          item.id === rosterId ? { ...item, playerIds: updatedPlayerIds } : item,
+          item.id === rosterId
+            ? {
+                ...item,
+                playerIds: updatedPlayerIds,
+                baseOrder: updatedPlayerIds,
+                rotationIndex: 0,
+              }
+            : item,
         ),
       }
     })
@@ -774,6 +830,7 @@ const buildMatchSet = (
         ...session.courts,
         {
           id: crypto.randomUUID(),
+          name: `Court ${session.courts.length + 1}`,
           teamA: [],
           teamB: [],
           scoreA: 0,
@@ -790,11 +847,23 @@ const buildMatchSet = (
       return { ...session, courts: session.courts.filter((court) => court.id !== courtId) }
     })
 
-  const assignToCourt = (rosterId: string) =>
+  const renameCourt = (courtId: string, name: string) =>
+    updateActiveSession((session) => ({
+      ...session,
+      courts: session.courts.map((court, index) =>
+        court.id === courtId
+          ? { ...court, name: name || `Court ${index + 1}` }
+          : court,
+      ),
+    }))
+
+  const assignToCourt = (rosterId: string, courtId?: string) =>
     updateActiveSession((session) => {
       const roster = session.rosters.find((r) => r.id === rosterId)
       if (!roster) return session
-      const court = session.courts.find((c) => c.teamA.length === 0 && c.teamB.length === 0)
+      const court = courtId
+        ? session.courts.find((c) => c.id === courtId && c.teamA.length === 0 && c.teamB.length === 0)
+        : session.courts.find((c) => c.teamA.length === 0 && c.teamB.length === 0)
       if (!court) return session
         const hasInGamePlayer = roster.playerIds.some(
           (playerId) =>
@@ -890,12 +959,27 @@ const forfeitMatch = (courtId: string) =>
             ? target.teamA
             : target.teamB
       const updatedStats = { ...session.stats }
-      for (const memberId of [...target.teamA, ...target.teamB]) {
+      const endedAt = Date.now()
+      const startedAt = target.startedAt ?? endedAt
+      const matchPlayerIds = [...target.teamA, ...target.teamB]
+      const waitingRecords = matchPlayerIds.map((memberId) => {
+        const waitingStartedAt =
+          updatedStats[memberId]?.waitingSince ?? startedAt
+
+        return {
+          memberId,
+          waitingStartedAt,
+          matchStartedAt: startedAt,
+          waitingMs: Math.max(0, startedAt - waitingStartedAt),
+          gameNumber: (updatedStats[memberId]?.gamesPlayed ?? 0) + 1,
+        }
+      })
+      for (const memberId of matchPlayerIds) {
         updatedStats[memberId] = {
           ...updatedStats[memberId],
           gamesPlayed: updatedStats[memberId].gamesPlayed + 1,
           wins: updatedStats[memberId].wins + (winnerIds.includes(memberId) ? 1 : 0),
-          waitingSince: Date.now(),
+          waitingSince: endedAt,
         }
       }
       return {
@@ -904,13 +988,18 @@ const forfeitMatch = (courtId: string) =>
         history: [
           {
             id: crypto.randomUUID(),
-            courtLabel: `Court ${session.courts.findIndex((c) => c.id === courtId) + 1}`,
+            courtLabel:
+              target.name ??
+              `Court ${session.courts.findIndex((c) => c.id === courtId) + 1}`,
             teamA: [...target.teamA],
             teamB: [...target.teamB],
             scoreA: safeScoreA,
             scoreB: safeScoreB,
             result: matchResult,
-            endedAt: Date.now(),
+            startedAt,
+            endedAt,
+            durationMs: Math.max(0, endedAt - startedAt),
+            waitingRecords,
           },
           ...session.history,
         ],
@@ -975,12 +1064,6 @@ const forfeitMatch = (courtId: string) =>
 const buildQueueList = (
   session: Session,
 ) => {
-  const queuedPlayers = new Set(
-    session.rosters.flatMap(
-      (roster) => roster.playerIds,
-    ),
-  )
-
   const inGamePlayers = new Set(
     session.courts.flatMap((court) => [
       ...court.teamA,
@@ -1000,10 +1083,6 @@ const buildQueueList = (
 
   const priorityPlayers =
     session.priorityList
-      .filter(
-        (id) =>
-          !queuedPlayers.has(id),
-      )
       .sort(sortByWaitingTime)
 
   const regularPlayers =
@@ -1053,43 +1132,242 @@ const buildQueueList = (
     ...regularPlayers,
   ]
 }
+const buildSessionHistorySnapshot = (
+  session: Session,
+): SessionHistory => {
+  const rankings =
+    Object.entries(session.stats)
+      .map(([memberId, stats]) => {
+        const losses =
+          stats.gamesPlayed - stats.wins
+
+        const winRate =
+          stats.gamesPlayed === 0
+            ? 0
+            : (stats.wins / stats.gamesPlayed) * 100
+
+        return {
+          memberId,
+
+          skillLevel:
+            memberById[memberId]?.skill ??
+            'Newbie',
+
+          totalGames:
+            stats.gamesPlayed +
+            stats.missedGames,
+
+          wins: stats.wins,
+
+          losses,
+
+          missedGames:
+            stats.missedGames,
+
+          gamesPlayed:
+            stats.gamesPlayed,
+
+          winRate,
+        }
+      })
+      .sort((a, b) => b.winRate - a.winRate)
+
+  const lastMatch =
+    session.history[0]
+
+  return {
+    id: crypto.randomUUID(),
+
+    title:
+      session.name,
+
+    createdAt:
+      session.createdAt,
+
+    endedAt:
+      lastMatch?.endedAt
+        ? new Date(lastMatch.endedAt).toISOString()
+        : new Date().toISOString(),
+
+    totalMatches:
+      session.history.length,
+
+    totalPlayers:
+      session.playerList.length,
+
+    rankings,
+
+    matches:
+      session.history,
+  }
+}
+
+const escapeCSVValue = (value: string) => {
+  if (!/[",\n]/.test(value)) return value
+  return `"${value.replaceAll('"', '""')}"`
+}
+
+const formatCSVDate = (timestamp?: number | null) =>
+  timestamp ? new Date(timestamp).toISOString() : ''
+
+const formatDuration = (durationMs?: number) => {
+  if (durationMs === undefined) return ''
+
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  return [hours, minutes, seconds]
+    .map((value) => String(value).padStart(2, '0'))
+    .join(':')
+}
+
 const exportSessionCSV = (
-  history: SessionHistory,
+  session: Session,
   memberById: Record<string, Member>,
 ) => {
-  const rows = [
+  const skillValue = (memberId: string) => {
+    const skill = memberById[memberId]?.skill
+
+    if (!skill) return 0
+
+    return skillOrder.indexOf(skill) + 1
+  }
+
+  const teamSkillTotal = (memberIds: string[]) =>
+    memberIds.reduce((total, memberId) => total + skillValue(memberId), 0)
+
+  const playerName = (memberId: string) =>
+    memberById[memberId]?.name ?? 'Unknown'
+
+  const matchWinner = (match: MatchHistory) => {
+    if (match.result === 'draw') return 'Draw'
+
+    return match.result === 'teamA' ? 'Team A' : 'Team B'
+  }
+
+  const matches = [...session.history].sort(
+    (a, b) => (a.startedAt ?? a.endedAt) - (b.startedAt ?? b.endedAt),
+  )
+
+  const rows: string[][] = [
+    ['Session Information'],
+    ['Session Name', session.name],
+    ['Session Created At', session.createdAt],
+    ['Exported At', new Date().toISOString()],
+    [],
+    ['Players Information'],
     [
-      'Rank',
-      'Player',
-      'SkillLevel',
-      'TotalGames',
+      'Player ID',
+      'Name',
+      'Skill',
+      'Skill Value',
+      'Date Joined',
+      'Games Played',
       'Wins',
       'Losses',
-      'MissedGames',
-      'GamesPlayed',
-      'WinRate',
+      'Missed Games',
     ],
   ]
 
-  history.rankings.forEach(
-    (player, index) => {
+  Object.entries(session.stats)
+    .sort(([, aStats], [, bStats]) => aStats.joinedAt - bStats.joinedAt)
+    .forEach(([memberId, stats]) => {
       rows.push([
-        `${index + 1}`,
-        memberById[player.memberId]?.name ??
-          'Unknown',
-        `${player.skillLevel}`,
-        `${player.totalGames}`,
-        `${player.wins}`,
-        `${player.losses}`,
-        `${player.missedGames}`,
-        `${player.gamesPlayed}`,
-        `${player.winRate.toFixed(1)}%`,
+        memberId,
+        playerName(memberId),
+        memberById[memberId]?.skill ?? 'Unknown',
+        `${skillValue(memberId)}`,
+        formatCSVDate(
+          stats.joinedAtTime ?? new Date(session.createdAt).getTime(),
+        ),
+        `${stats.gamesPlayed}`,
+        `${stats.wins}`,
+        `${Math.max(0, stats.gamesPlayed - stats.wins)}`,
+        `${stats.missedGames}`,
       ])
-    },
+    })
+
+  rows.push(
+    [],
+    ['Queue Performance - Match Records'],
+    [
+      'Match Number',
+      'Court',
+      'Team A Players',
+      'Team B Players',
+      'Team A Skill Total',
+      'Team B Skill Total',
+      'Start Time',
+      'End Time',
+      'Match Duration',
+      'Winner',
+      'Team A Score',
+      'Team B Score',
+    ],
   )
 
+  matches.forEach((match, index) => {
+    rows.push([
+      `${index + 1}`,
+      match.courtLabel,
+      match.teamA.map(playerName).join(' / '),
+      match.teamB.map(playerName).join(' / '),
+      `${teamSkillTotal(match.teamA)}`,
+      `${teamSkillTotal(match.teamB)}`,
+      formatCSVDate(match.startedAt),
+      formatCSVDate(match.endedAt),
+      formatDuration(
+        match.durationMs ??
+          (match.startedAt ? Math.max(0, match.endedAt - match.startedAt) : undefined),
+      ),
+      matchWinner(match),
+      `${match.scoreA}`,
+      `${match.scoreB}`,
+    ])
+  })
+
+  rows.push(
+    [],
+    ['Waiting Time Records'],
+    [
+      'Match Number',
+      'Player ID',
+      'Player',
+      'Game Number',
+      'Waiting Started At',
+      'Match Started At',
+      'Waiting Duration',
+      'Waiting Seconds',
+    ],
+  )
+
+  matches.forEach((match, index) => {
+    const matchPlayerIds = [...match.teamA, ...match.teamB]
+
+    matchPlayerIds.forEach((memberId) => {
+      const waitingRecord = match.waitingRecords?.find(
+        (record) => record.memberId === memberId,
+      )
+
+      rows.push([
+        `${index + 1}`,
+        memberId,
+        playerName(memberId),
+        waitingRecord ? `${waitingRecord.gameNumber}` : '',
+        formatCSVDate(waitingRecord?.waitingStartedAt),
+        formatCSVDate(waitingRecord?.matchStartedAt ?? match.startedAt),
+        formatDuration(waitingRecord?.waitingMs),
+        waitingRecord ? `${Math.round(waitingRecord.waitingMs / 1000)}` : '',
+      ])
+    })
+  })
+
   const csv =
-    rows.map((row) => row.join(',')).join('\n')
+    rows
+      .map((row) => row.map(escapeCSVValue).join(','))
+      .join('\n')
 
   const blob = new Blob([csv], {
     type: 'text/csv;charset=utf-8;',
@@ -1105,7 +1383,7 @@ const exportSessionCSV = (
 
   link.setAttribute(
     'download',
-    `${history.title}.csv`,
+    `${session.name}.csv`,
   )
 
   document.body.appendChild(link)
@@ -1117,71 +1395,7 @@ const exportSessionCSV = (
 
 const endSession = () =>
   updateActiveSession((session) => {
-    const rankings =
-      Object.entries(session.stats)
-        .map(([memberId, stats]) => {
-          const losses =
-            stats.gamesPlayed - stats.wins
-
-          const winRate =
-            stats.gamesPlayed === 0
-              ? 0
-              : (stats.wins / stats.gamesPlayed) * 100
-
-            return {
-              memberId,
-
-              skillLevel:
-                memberById[memberId]?.skill ??
-                'Newbie',
-
-              totalGames:
-                stats.gamesPlayed +
-                stats.missedGames,
-
-              wins: stats.wins,
-
-              losses,
-
-              missedGames:
-                stats.missedGames,
-
-              gamesPlayed:
-                stats.gamesPlayed,
-
-              winRate,
-            }
-        })
-        .sort((a, b) => b.winRate - a.winRate)
-
-    const lastMatch =
-      session.history[0]
-
-    const snapshot: SessionHistory = {
-      id: crypto.randomUUID(),
-
-      title:
-        session.name,
-
-      createdAt:
-        session.createdAt,
-
-      endedAt:
-        lastMatch?.endedAt
-          ? new Date(lastMatch.endedAt).toISOString()
-          : new Date().toISOString(),
-
-      totalMatches:
-        session.history.length,
-
-      totalPlayers:
-        session.playerList.length,
-
-      rankings,
-
-      matches:
-        session.history,
-    }
+    const snapshot = buildSessionHistorySnapshot(session)
 
     return {
       ...session,
@@ -1219,6 +1433,7 @@ const endSession = () =>
     resignFromPlaying,
     addCourt,
     removeCourt,
+    renameCourt,
     updateCourtScore,
     endMatch,
     generateRoster,

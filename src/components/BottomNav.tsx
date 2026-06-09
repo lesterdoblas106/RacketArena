@@ -2,7 +2,7 @@ import type { Page } from '../types/app'
 
 type BottomNavProps = {
   page: Page
-  onSelect: (page: 'members' | 'queue' | 'ranking' | 'history') => void
+  onSelect: (page: 'members' | 'queue' | 'ranking' | 'history' | 'payment') => void
 }
 
 export function BottomNav({ page, onSelect }: BottomNavProps) {
@@ -31,6 +31,12 @@ export function BottomNav({ page, onSelect }: BottomNavProps) {
         onClick={() => onSelect('history')}
       >
         History
+      </button>
+      <button
+        className={page === 'payment' ? 'active' : ''}
+        onClick={() => onSelect('payment')}
+      >
+        Payment
       </button>
     </nav>
   )

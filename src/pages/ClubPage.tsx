@@ -326,12 +326,17 @@ export function ClubPage({
         submitLabel="Add All"
       >
         <label className="field">
-          One member per line (default skill: Intermediate)
+          One member per line
+          <div className="bulk-help">
+            Add a skill number after the name: 1 Newbie, 2 Beginner, 3 Low
+            Intermediate, 4 Intermediate, 5 High Intermediate, 6 Advanced, 7
+            Elite. No number defaults to Intermediate.
+          </div>
           <textarea
             className="bulk-textarea"
             value={bulkMembersText}
             onChange={(event) => setBulkMembersText(event.target.value)}
-            placeholder={'Alex\nBrent\nCara\nDale'}
+            placeholder={'Anthony 3\nBawaw 5\nJohn'}
             required
           />
         </label>
