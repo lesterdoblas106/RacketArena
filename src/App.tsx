@@ -11,8 +11,15 @@ import { MembersPage } from './pages/MembersPage'
 import { PaymentPage } from './pages/PaymentPage'
 import { QueuePage } from './pages/QueuePage'
 import { RankingPage } from './pages/RankingPage'
+import HomePage from './pages/HomePage'
+import ClubListPage from "./pages/ClubListPage";
 import type { Skill } from './types/app'
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom'
+import { useAuth } from './hooks/useAuth'
+import Login from './pages/Login'
+import { useEffect } from 'react'
+import { supabase } from './lib/supabase'
+
 
 function App() {
   const {
@@ -57,17 +64,36 @@ function App() {
     forfeitMatch,
     exportSessionCSV,
   } = useRacketArenaState()
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [authOpen, setAuthOpen] = useState(false)
+  const user = useAuth()
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  useEffect(() => {
+    if (user) {
+      setAuthOpen(false)
+      navigate('/home')
+    }
+  }, [user, navigate])
+  
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      console.log("Current user:", data.user)
+    })
+  }, [])
+
   const [rankingSort, setRankingSort] = useState<'winRate' | 'games' | 'name' | 'skill'>(
     'winRate',
   )
   const [rankingSkillFilter, setRankingSkillFilter] = useState<Skill | 'all'>('all')
-  const [helpOpen, setHelpOpen] = useState(false)
-  const navigate = useNavigate()
-  const location = useLocation()
 
+
+  
   const getCurrentPage = () => {
     const path = location.pathname
     if (path === '/' || path === '') return 'landing'
+    if (path === '/home') return 'home'
     if (path === '/club') return 'club'
     if (path === '/members') return 'members'
     if (path === '/queue') return 'queue'
@@ -78,19 +104,37 @@ function App() {
   }
 
   const currentPage = getCurrentPage()
-  const showHome = currentPage !== 'club' && currentPage !== 'landing'
+  const showHome = currentPage !== 'club' && currentPage !== 'landing' && currentPage !== 'home'
   const topBarPageLabel =
     {
+      home: 'Home',
       club: 'Club',
       members: 'Members',
       queue: 'Queue',
       ranking: 'Ranking',
       history: 'History',
       payment: 'Payment',
-      landing: 'Home',
+      landing: 'Landing',
     }[currentPage] ?? 'Racket Arena'
   const helpContent =
     {
+      home:{
+        title:'How to use Club',
+        items: [
+          'Create a queue for each playing session or open an existing queue from Queue History.',
+          'Use the members area to add, bulk add, edit, or delete club members.',
+          'Sort queue history by date or name, and sort members by name or skill level.',
+        ],
+        skillLevels: [
+          { label: 'Newbie', color: '#d1d5db' },
+          { label: 'Beginner', color: '#fde047' },
+          { label: 'Low Intermediate', color: '#22c55e' },
+          { label: 'Intermediate', color: '#3b82f6' },
+          { label: 'High Intermediate', color: '#8b5cf6' },
+          { label: 'Advanced', color: '#ef4444' },
+          { label: 'Elite', color: '#111827' },
+        ],
+      },
       club: {
         title: 'How to use Club',
         items: [
@@ -130,6 +174,7 @@ function App() {
         items: [
           'Press Generate to create a compatible roster from the current queue.',
           'Select one player before pressing Generate to make that player the base player for matchmaking.',
+          'Select two players to form a team and find opponents depending on their skills.',
           'Select exactly four players from the Players List to create a manual match.',
           'Click a player name inside a roster to replace them, shuffle to rotate teammates, assign to court to start, or dissolve to remove the roster.',
           'Use Court Section to add, rename, remove empty courts, end matches, or forfeit active games.',
@@ -184,10 +229,16 @@ function App() {
   const handleNavSelect = (page: string) => {
     navigate(`/${page}`)
   }
+  const hideBottomNavPages = [
+  'landing',
+  'home',
+  'clublist'
+]
 
   return (
     <>
-      {currentPage !== 'landing' && (
+      {currentPage !== 'landing' && 
+      currentPage !== 'home' &&(
         <TopBar
           title={activeSession?.name ?? 'Racket Arena'}
           pageLabel={topBarPageLabel}
@@ -198,10 +249,18 @@ function App() {
       )}
 
       {currentPage === 'landing' ? (
-        <LandingPage onOpen={() => navigate('/club')} />
+        <LandingPage onOpen={() => setAuthOpen(true)} />
       ) : (
         <main className="app-shell">
           <Routes>
+            <Route
+              path="/home"
+              element={
+                <HomePage
+                  onOpenClubs={() => navigate('/clubs')}
+                />
+              }
+            />
             <Route
               path="/club"
               element={
@@ -315,15 +374,24 @@ function App() {
                 )
               }
             />
-            <Route path="*" element={<Navigate to="/club" />} />
+            <Route path="*" element={<Navigate to="/home" />} />
           </Routes>
         </main>
       )}
 
-      {activeSession && currentPage !== 'landing' && (
-        <BottomNav page={currentPage} onSelect={handleNavSelect} />
+      {activeSession &&
+        !hideBottomNavPages.includes(currentPage) && (
+          <BottomNav
+            page={currentPage}
+            onSelect={handleNavSelect}
+          />
       )}
-
+        <Modal
+        open={authOpen}
+        onClose={() => setAuthOpen(false)}
+      >
+        <Login />
+      </Modal>
       <Modal
         open={helpOpen}
         title={helpContent.title}

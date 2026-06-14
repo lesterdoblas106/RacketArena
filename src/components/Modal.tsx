@@ -2,7 +2,7 @@ import type { FormEvent, ReactNode } from 'react'
 
 type ModalProps = {
   open: boolean
-  title: string
+  title?: string
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
@@ -20,12 +20,27 @@ export function Modal({ open, title, onClose, children, footer }: ModalProps) {
         aria-label={title}
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="modal-header">
-          <h3>{title}</h3>
-          <button className="ghost" onClick={onClose} aria-label="Close modal">
-            x
+        {title ? (
+          <header className="modal-header">
+            <h3>{title}</h3>
+
+            <button
+              className="ghost"
+              onClick={onClose}
+              aria-label="Close modal"
+            >
+              ×
+            </button>
+          </header>
+        ) : (
+          <button
+            className="modal-close-floating"
+            onClick={onClose}
+            aria-label="Close modal"
+          >
+            ×
           </button>
-        </header>
+        )}
         <div className="modal-body">{children}</div>
         {footer && <footer className="modal-footer">{footer}</footer>}
       </section>

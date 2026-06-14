@@ -6,7 +6,12 @@
 
 body {
   margin: 0;
-  background: #071633;
+  background: 
+    radial-gradient(
+      circle at top,
+      rgba(59,130,246,0.18),
+      transparent 35%
+    ),#071633;
   color: #ffffff;
   font-family:
     Inter,

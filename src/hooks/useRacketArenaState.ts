@@ -557,6 +557,130 @@ const buildMatchSet = (
 
   return []
 }
+
+const buildMatchSetForTeammates = (
+  session: Session,
+  queueList: string[],
+  teammate1Id: string,
+  teammate2Id: string,
+) => {
+  if (queueList.length < 4) {
+    return []
+  }
+
+  const queuedPlayers = new Set(
+    session.rosters.flatMap(
+      (roster) => roster.playerIds,
+    ),
+  )
+
+  const teammate1Skill = getSkillLevel(teammate1Id)
+  const teammate2Skill = getSkillLevel(teammate2Id)
+  const teamTotalSkill = teammate1Skill + teammate2Skill
+
+  const smallestSkillPlayer =
+    teammate1Skill <= teammate2Skill ? teammate1Id : teammate2Id
+  const smallestSkill = Math.min(teammate1Skill, teammate2Skill)
+  
+  const smallestPlayerTotalGames = getTotalGames(
+    session.stats[smallestSkillPlayer],
+  )
+
+  const isEven = smallestPlayerTotalGames % 2 === 0
+
+  const teammates = new Set([teammate1Id, teammate2Id])
+
+  for (let widenLevel = 0; widenLevel <= 4; widenLevel++) {
+    // Search for first opponent
+    for (let i = 0; i < queueList.length; i++) {
+      const firstOpponentId = queueList[i]
+
+      if (
+        teammates.has(firstOpponentId) ||
+        queuedPlayers.has(firstOpponentId)
+      ) {
+        continue
+      }
+
+      const firstOpponentSkill = getSkillLevel(firstOpponentId)
+
+      // Check if first opponent matches criteria
+      let minSkillForFirst = smallestSkill
+      let maxSkillForFirst = smallestSkill + 1
+
+      if (widenLevel >= 1) {
+        minSkillForFirst -= 1
+        maxSkillForFirst += 1
+      }
+
+      minSkillForFirst = Math.max(1, minSkillForFirst)
+      maxSkillForFirst = Math.min(7, maxSkillForFirst)
+
+      if (firstOpponentSkill >= minSkillForFirst && firstOpponentSkill <= maxSkillForFirst) {
+        // Found first opponent, now search for second opponent from beginning of list
+        for (let j = 0; j < queueList.length; j++) {
+          const secondOpponentId = queueList[j]
+
+          if (
+            secondOpponentId === firstOpponentId ||
+            teammates.has(secondOpponentId) ||
+            queuedPlayers.has(secondOpponentId)
+          ) {
+            continue
+          }
+
+          const secondOpponentSkill = getSkillLevel(secondOpponentId)
+
+          if (isEven) {
+            // Even: opponent team total should be >= teamTotalSkill (±1 initially, ±2 if widening)
+            let minOpponentSkill = teamTotalSkill - firstOpponentSkill
+            let maxOpponentSkill = (teamTotalSkill + 1) - firstOpponentSkill
+            
+            if (widenLevel >= 2) {
+              minOpponentSkill = (teamTotalSkill - 2) - firstOpponentSkill
+              maxOpponentSkill = (teamTotalSkill + 2) - firstOpponentSkill
+            }
+
+            minOpponentSkill = Math.max(1, minOpponentSkill)
+            maxOpponentSkill = Math.min(7, maxOpponentSkill)
+
+            if (secondOpponentSkill >= minOpponentSkill && secondOpponentSkill <= maxOpponentSkill) {
+              return [
+                teammate1Id,
+                teammate2Id,
+                firstOpponentId,
+                secondOpponentId,
+              ]
+            }
+          } else {
+            // Odd: opponent team total should be <= teamTotalSkill (±1 initially, ±2 if widening)
+            let minOpponentSkill = (teamTotalSkill - 1) - firstOpponentSkill
+            let maxOpponentSkill = teamTotalSkill - firstOpponentSkill
+            
+            if (widenLevel >= 2) {
+              minOpponentSkill = (teamTotalSkill - 2) - firstOpponentSkill
+              maxOpponentSkill = (teamTotalSkill + 2) - firstOpponentSkill
+            }
+
+            minOpponentSkill = Math.max(1, minOpponentSkill)
+            maxOpponentSkill = Math.min(7, maxOpponentSkill)
+
+            if (secondOpponentSkill >= minOpponentSkill && secondOpponentSkill <= maxOpponentSkill) {
+              return [
+                teammate1Id,
+                teammate2Id,
+                firstOpponentId,
+                secondOpponentId,
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return []
+}
     
   const balanceTeams = (
     playerIds: string[],
@@ -618,12 +742,7 @@ const buildMatchSet = (
       const queuedPlayers = new Set(
         session.rosters.flatMap((roster) => roster.playerIds),
       )
-      const selectedBasePlayerId = manualPickIds.find(
-        (memberId) =>
-          queueList.includes(memberId) &&
-          !queuedPlayers.has(memberId),
-      )
-
+      
       const incompleteRosterIndex =
         session.rosters.findIndex(
           (roster) => roster.playerIds.length < 4,
@@ -631,6 +750,7 @@ const buildMatchSet = (
 
       let selectedPlayers: string[] = []
 
+      // Handle incomplete roster completion first
       if (incompleteRosterIndex !== -1) {
         const incompleteRoster =
           session.rosters[incompleteRosterIndex]
@@ -673,6 +793,56 @@ const buildMatchSet = (
           rosters: updatedRosters,
         }
       }
+
+      // Handle 2-player teammate selection
+      if (manualPickIds.length === 2) {
+        const teammate1 = manualPickIds[0]
+        const teammate2 = manualPickIds[1]
+
+        if (
+          queueList.includes(teammate1) &&
+          queueList.includes(teammate2) &&
+          !queuedPlayers.has(teammate1) &&
+          !queuedPlayers.has(teammate2)
+        ) {
+          const waitSetArr = buildMatchSetForTeammates(
+            session,
+            queueList,
+            teammate1,
+            teammate2,
+          )
+
+          if (waitSetArr.length < 4) {
+            toast.warning(
+              'Not enough compatible players found for the team.',
+            )
+            return session
+          }
+
+          selectedPlayers = balanceTeams(waitSetArr)
+
+          return {
+            ...session,
+            rosters: [
+              ...session.rosters,
+              {
+                id: crypto.randomUUID(),
+                playerIds: selectedPlayers,
+                baseOrder: selectedPlayers,
+                rotationIndex: 0,
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          }
+        }
+      }
+
+      // Handle single-player base selection (original logic)
+      const selectedBasePlayerId = manualPickIds.find(
+        (memberId) =>
+          queueList.includes(memberId) &&
+          !queuedPlayers.has(memberId),
+      )
 
       const waitSetArr = buildMatchSet(
         session,

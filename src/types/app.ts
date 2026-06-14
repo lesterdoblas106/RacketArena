@@ -103,6 +103,7 @@ export type SessionHistory = {
 }
 
 export type Page =
+  | 'home'
   | 'landing'
   | 'club'
   | 'members'

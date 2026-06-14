@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { Modal, ModalForm } from '../components/Modal'
 import { skillOrder, type Member, type Session, type Skill } from '../types/app'
 
+
 type ClubPageProps = {
   sessions: Session[]
   members: Member[]
@@ -140,7 +141,6 @@ export function ClubPage({
     setBulkMembersText('')
     setBulkModalOpen(false)
   }
-
   return (
     <section className="club-page">
       <article className="card">
