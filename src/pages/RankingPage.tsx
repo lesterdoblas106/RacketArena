@@ -1,6 +1,6 @@
 import type { Member, Session, Skill } from '../types/app'
 
-type RankingSort = 'winRate' | 'games' | 'name' | 'skill'
+type RankingSort = 'score'|'winRate' | 'games' | 'name' | 'skill'
 
 type RankingPageProps = {
   session: Session
@@ -34,7 +34,8 @@ export function RankingPage({
       const member = memberById[id]
       const stats = session.stats[id]
       const winRate = stats.gamesPlayed > 0 ? (stats.wins / stats.gamesPlayed) * 100 : 0
-      return { id, member, stats, winRate }
+      const score = stats.wins*100-(stats.gamesPlayed-stats.wins)
+      return { id, member, stats, winRate, score }
     })
     .filter((entry) => (skillFilter === 'all' ? true : entry.member.skill === skillFilter))
     .sort((a, b) => {
@@ -43,11 +44,13 @@ export function RankingPage({
       if (sortBy === 'skill') {
         return (
           a.member.skill.localeCompare(b.member.skill) ||
+          b.score - a.score ||
           b.winRate - a.winRate ||
           b.stats.wins - a.stats.wins
         )
       }
-      return b.winRate - a.winRate || b.stats.wins - a.stats.wins
+      if(sortBy === 'winRate')return b.stats.wins - a.stats.wins
+      return b.score-a.score || b.winRate - a.winRate || b.stats.wins - a.stats.wins
     })
 
   return (
@@ -58,6 +61,7 @@ export function RankingPage({
           <label className="filter-label">
             <span>Sort</span>
             <select value={sortBy} onChange={(e) => onSortBy(e.target.value as RankingSort)}>
+              <option value="score">Stat Score</option>
               <option value="winRate">Win Rate</option>
               <option value="games">No. of Games</option>
               <option value="name">Name</option>
@@ -89,17 +93,15 @@ export function RankingPage({
             <tr>
               <th className="rank-col">#</th>
               <th className="player-col">Player</th>
-              <th>W</th>
-              <th>L</th>
               <th>G</th>
+              <th>W</th>
               <th>WR</th>
+              <th>Score</th>
             </tr>
           </thead>
 
           <tbody>
             {playingMembers.map((entry, index) => {
-              const losses = entry.stats.gamesPlayed - entry.stats.wins
-
               return (
                 <tr
                   key={entry.id}
@@ -118,14 +120,12 @@ export function RankingPage({
                   <td className="leaderboard-player">
                     <strong>{entry.member.name}</strong>
                   </td>
-
-                  <td>{entry.stats.wins}</td>
-
-                  <td>{losses}</td>
-
                   <td>{entry.stats.gamesPlayed}</td>
-
+                  <td>{entry.stats.wins}</td>
                   <td>{entry.winRate.toFixed(1)}%</td>
+                  <td><strong>{entry.score}</strong></td>
+
+
                 </tr>
               )
             })}

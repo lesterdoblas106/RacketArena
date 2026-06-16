@@ -27,8 +27,6 @@ export function useRacketArenaState() {
               memberId,
               {
                 ...stats,
-                joinedAtTime:
-                  stats.joinedAtTime ?? new Date(session.createdAt).getTime(),
               },
             ]),
           ),
@@ -121,7 +119,6 @@ export function useRacketArenaState() {
             wins: 0,
             missedGames: 0,
             joinedAt: Object.keys(session.stats).length + 1,
-            joinedAtTime: Date.now(),
             waitingSince: Date.now(),
           },
         },
@@ -253,12 +250,19 @@ export function useRacketArenaState() {
           (id) => !session.priorityList.includes(id),
         )
 
+        const inGamePlayers = new Set(
+          session.courts.flatMap((court) => [
+            ...court.teamA,
+            ...court.teamB,
+          ]),
+        )
+
         let lowestTotalGames = 0
 
         if (activeNonPriorityPlayers.length > 0) {
           lowestTotalGames = Math.min(
             ...activeNonPriorityPlayers.map((id) =>
-              getTotalGames(session.stats[id]),
+              getTotalGames(session.stats[id]) + (inGamePlayers.has(id) ? 1 : 0),
             ),
           )
         }
@@ -274,6 +278,7 @@ export function useRacketArenaState() {
           ...memberStats,
           missedGames,
           waitingSince: Date.now(),
+          joinedAtTime: memberStats.joinedAtTime ?? Date.now(),
         }
 
         const shouldPrioritize = missedGames > 0
@@ -402,6 +407,14 @@ const isCompatiblePlayer = (
 
   const comparedSkill =
     getSkillLevel(comparedPlayerId)
+
+  if (getTotalGames(baseStats)=== 0) {
+    return (
+      Math.abs(
+        baseSkill - comparedSkill,
+      ) <= 1
+    )
+  }
 
   let minSkill = baseSkill
   let maxSkill = baseSkill
@@ -982,9 +995,44 @@ const forfeitMatch = (courtId: string) =>
           waitingSince: endedAt,
         }
       }
+
+      // Recalculate missedGames and update priorityList after match ends
+      const inGamePlayers = new Set(
+        session.courts
+          .filter((c) => c.id !== courtId)
+          .flatMap((court) => [...court.teamA, ...court.teamB]),
+      )
+
+      const activeNonPriorityPlayers = session.playingIds.filter(
+        (id) =>
+          !session.priorityList.includes(id) &&
+          !matchPlayerIds.includes(id),
+      )
+
+      let lowestTotalGames = 0
+      if (activeNonPriorityPlayers.length > 0) {
+        lowestTotalGames = Math.min(
+          ...activeNonPriorityPlayers.map((id) =>
+            getTotalGames(updatedStats[id]) + (inGamePlayers.has(id) ? 1 : 0),
+          ),
+        )
+      }
+
+      // Update priorityList: remove players whose missedGames is now 0
+      const updatedPriorityList = session.priorityList.filter((id) => {
+        if (!matchPlayerIds.includes(id)) {
+          return true // Keep non-match players as they are
+        }
+        const newMissedGames = 
+          lowestTotalGames - getTotalGames(updatedStats[id],
+        )
+        return newMissedGames > 0
+      })
+
       return {
         ...session,
         stats: updatedStats,
+        priorityList: updatedPriorityList,
         history: [
           {
             id: crypto.randomUUID(),
@@ -1272,6 +1320,7 @@ const exportSessionCSV = (
   ]
 
   Object.entries(session.stats)
+    .filter(([, stats]) => stats.joinedAtTime !== undefined && stats.joinedAtTime !== null)
     .sort(([, aStats], [, bStats]) => aStats.joinedAt - bStats.joinedAt)
     .forEach(([memberId, stats]) => {
       rows.push([
@@ -1279,9 +1328,7 @@ const exportSessionCSV = (
         playerName(memberId),
         memberById[memberId]?.skill ?? 'Unknown',
         `${skillValue(memberId)}`,
-        formatCSVDate(
-          stats.joinedAtTime ?? new Date(session.createdAt).getTime(),
-        ),
+        formatCSVDate(stats.joinedAtTime),
         `${stats.gamesPlayed}`,
         `${stats.wins}`,
         `${Math.max(0, stats.gamesPlayed - stats.wins)}`,

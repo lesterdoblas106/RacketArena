@@ -57,8 +57,8 @@ function App() {
     forfeitMatch,
     exportSessionCSV,
   } = useRacketArenaState()
-  const [rankingSort, setRankingSort] = useState<'winRate' | 'games' | 'name' | 'skill'>(
-    'winRate',
+  const [rankingSort, setRankingSort] = useState<'score'|'winRate' | 'games' | 'name' | 'skill'>(
+    'score',
   )
   const [rankingSkillFilter, setRankingSkillFilter] = useState<Skill | 'all'>('all')
   const [helpOpen, setHelpOpen] = useState(false)

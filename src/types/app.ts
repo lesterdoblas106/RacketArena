@@ -134,7 +134,6 @@ export const buildDefaultStats = (
       wins: 0,
       missedGames: 0,
       joinedAt: index + 1,
-      joinedAtTime: Date.now(),
       waitingSince: Date.now(),
     }
     return acc
