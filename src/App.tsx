@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import './App.css'
 import { BottomNav } from './components/BottomNav'
-import { Modal } from './components/Modal'
+// import { Modal } from './components/Modal'
 import { TopBar } from './components/TopBar'
 import { useRacketArenaState } from './hooks/useRacketArenaState'
 import { ClubPage } from './pages/ClubPage'
@@ -13,6 +13,7 @@ import { QueuePage } from './pages/QueuePage'
 import { RankingPage } from './pages/RankingPage'
 import type { Skill } from './types/app'
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom'
+import TourModal from "./components/onboarding/TourModal";
 
 function App() {
   const {
@@ -24,9 +25,6 @@ function App() {
     clubMemberSort,
     setClubQueueSort,
     setClubMemberSort,
-    playingSort,
-    setPlayingSort,
-    activePlayingMembers,
     playersSort,
     setPlayersSort,
     manualPickIds,
@@ -36,13 +34,18 @@ function App() {
     deleteQueue,
     addMember,
     addMembersBulk,
+    addVisitors,
     editMember,
     deleteMember,
+    editVisitor,
+    deleteVisitor,
     moveToPlaying,
     resignFromPlaying,
+    setParticipant,
     addCourt,
     removeCourt,
     renameCourt,
+    updateHistoryMatch,
     endMatch,
     generateRoster,
     queueManualRoster,
@@ -56,6 +59,8 @@ function App() {
     buildQueueList,
     forfeitMatch,
     exportSessionCSV,
+    startSession,
+    endSession,
   } = useRacketArenaState()
   const [rankingSort, setRankingSort] = useState<'score'|'winRate' | 'games' | 'name' | 'skill'>(
     'score',
@@ -79,97 +84,26 @@ function App() {
 
   const currentPage = getCurrentPage()
   const showHome = currentPage !== 'club' && currentPage !== 'landing'
+  
   const topBarPageLabel =
     {
       club: 'Club',
-      members: 'Members',
+      members: 'Attendance',
       queue: 'Queue',
       ranking: 'Ranking',
       history: 'History',
       payment: 'Payment',
       landing: 'Home',
     }[currentPage] ?? 'Racket Arena'
-  const helpContent =
-    {
-      club: {
-        title: 'How to use Club',
-        items: [
-          'Create a queue for each playing session or open an existing queue from Queue History.',
-          'Use the members area to add, bulk add, edit, or delete club members.',
-          'Sort queue history by date or name, and sort members by name or skill level.',
-        ],
-        skillLevels: [
-          { label: 'Newbie', color: '#d1d5db' },
-          { label: 'Beginner', color: '#fde047' },
-          { label: 'Low Intermediate', color: '#22c55e' },
-          { label: 'Intermediate', color: '#3b82f6' },
-          { label: 'High Intermediate', color: '#8b5cf6' },
-          { label: 'Advanced', color: '#ef4444' },
-          { label: 'Elite', color: '#111827' },
-        ],
-      },
-      members: {
-        title: 'How to use Members',
-        items: [
-          'Move members into Currently Playing before they can join court rotations and queue generation.',
-          'Use Resign to move a player back to Non-Playing while keeping their session stats.',
-          'Use sorting to review active players by arrival, games, wins, skill, name, or queue order.',
-        ],
-        skillLevels: [
-          { label: 'Newbie', color: '#d1d5db' },
-          { label: 'Beginner', color: '#fde047' },
-          { label: 'Low Intermediate', color: '#22c55e' },
-          { label: 'Intermediate', color: '#3b82f6' },
-          { label: 'High Intermediate', color: '#8b5cf6' },
-          { label: 'Advanced', color: '#ef4444' },
-          { label: 'Elite', color: '#111827' },
-        ],
-      },
-      queue: {
-        title: 'How to use Queue',
-        items: [
-          'Press Generate to create a compatible roster from the current queue.',
-          'Select one player before pressing Generate to make that player the base player for matchmaking.',
-          'Select exactly four players from the Players List to create a manual match.',
-          'Click a player name inside a roster to replace them, shuffle to rotate teammates, assign to court to start, or dissolve to remove the roster.',
-          'Use Court Section to add, rename, remove empty courts, end matches, or forfeit active games.',
-        ],
-      },
-      ranking: {
-        title: 'How to use Ranking',
-        items: [
-          'Review player standings for the active session.',
-          'Sort rankings by win rate, games, name, or skill.',
-          'Use the skill filter to focus on a specific skill group.',
-        ],
-      },
-      history: {
-        title: 'How to use History',
-        items: [
-          'View completed matches with teams, score, result, court, and completion time.',
-          "Filter history by player name to review a player's completed games.",
-          'Use Export CSV to download thesis-ready session data, including player information, match records, team skill totals, and waiting-time records.',
-        ],
-      },
-      payment: {
-        title: 'How to use Payment',
-        items: [
-          'Enter court, shuttlecock, and individual payment values to calculate the amount due per participating player.',
-          'Mark players as paid, choose their mode of payment, and add notes or reference numbers.',
-          'Review collected totals by payment mode, such as Cash or GCash.',
-          'Payment entries are saved per session when you move between pages.',
-        ],
-      },
-      landing: {
-        title: 'How to use RacketArena',
-        items: [
-          'Open the app to manage badminton sessions, player queues, court rotation, rankings, history, and payments.',
-        ],
-      },
-    }[currentPage] ?? {
-      title: 'How to use RacketArena',
-      items: ['Use the bottom navigation to move between the main session tools.'],
-    }
+    const pageToTourIndex = {
+    landing: 0,
+    club: 0,
+    members: 3,
+    queue: 4,
+    ranking: 8,
+    history: 9,
+    payment: 10,
+}
 
   const handleOpenSession = (sessionId: string) => {
     openSession(sessionId)
@@ -230,13 +164,15 @@ function App() {
                   <MembersPage
                     session={activeSession}
                     memberById={memberById}
-                    playingSort={playingSort}
-                    onChangeSort={setPlayingSort}
-                    activePlayingMembers={activePlayingMembers}
+                    clubMembers={sortedClubMembers}
                     onMoveToPlaying={moveToPlaying}
                     onResign={resignFromPlaying}
-                    onAddMember={addMember}
-                    onAddMembersBulk={addMembersBulk}
+                    onSetParticipant={setParticipant}
+                    onAddVisitors={addVisitors}
+                    onEditVisitor={editVisitor}
+                    onDeleteVisitor={deleteVisitor}
+                    onStartQueue={startSession}
+                    onEndQueue={endSession}
                   />
                 ) : (
                   <Navigate to="/club" />
@@ -295,7 +231,12 @@ function App() {
               path="/history"
               element={
                 activeSession ? (
-                    <HistoryPage session={activeSession} memberById={memberById} exportSessionCSV={exportSessionCSV} />
+                    <HistoryPage
+                      session={activeSession}
+                      memberById={memberById}
+                      exportSessionCSV={exportSessionCSV}
+                      updateHistoryMatch={updateHistoryMatch}
+                    />
                 ) : (
                   <Navigate to="/club" />
                 )
@@ -324,11 +265,12 @@ function App() {
         <BottomNav page={currentPage} onSelect={handleNavSelect} />
       )}
 
-      <Modal
+      {/* <Modal
         open={helpOpen}
         title={helpContent.title}
         onClose={() => setHelpOpen(false)}
       >
+      
         <div className="help-content">
           <ul>
             {helpContent.items.map((item) => (
@@ -361,7 +303,12 @@ function App() {
             <p>© 2026 RacketArena. Developed by Lester John Doblas.</p>
           </div>
         </div>
-      </Modal>
+      </Modal> */}
+      <TourModal
+        open={helpOpen}
+        startPage={pageToTourIndex[currentPage] ?? 0}
+        onClose={() => setHelpOpen(false)}
+      />
     </>
   )
 }

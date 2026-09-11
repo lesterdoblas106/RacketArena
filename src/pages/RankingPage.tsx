@@ -29,7 +29,7 @@ export function RankingPage({
   skillFilter,
   onSkillFilter,
 }: RankingPageProps) {
-  const playingMembers = session.playingIds
+  const rankedMembers = (session.participantIds ?? session.playingIds)
     .map((id) => {
       const member = memberById[id]
       const stats = session.stats[id]
@@ -37,6 +37,7 @@ export function RankingPage({
       const score = stats.wins*100-(stats.gamesPlayed-stats.wins)
       return { id, member, stats, winRate, score }
     })
+    .filter((entry) => entry.stats.gamesPlayed > 0) 
     .filter((entry) => (skillFilter === 'all' ? true : entry.member.skill === skillFilter))
     .sort((a, b) => {
       if (sortBy === 'name') return a.member.name.localeCompare(b.member.name)
@@ -101,7 +102,7 @@ export function RankingPage({
           </thead>
 
           <tbody>
-            {playingMembers.map((entry, index) => {
+            {rankedMembers.map((entry, index) => {
               return (
                 <tr
                   key={entry.id}

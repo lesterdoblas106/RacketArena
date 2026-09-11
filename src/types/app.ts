@@ -17,10 +17,13 @@ export type MemberStats = {
   gamesPlayed: number
   wins: number
   missedGames: number
-  joinedAt: number
+  joinedAt: number  
   joinedAtTime?: number
   waitingSince: number
   
+  totalWaitMs: number
+  waitPeriods: number
+  averageWaitMs: number
 }
 
 export type Roster = {
@@ -65,7 +68,10 @@ export type Session = {
   id: string
   name: string
   createdAt: string
+  startedAt?: number | null
+  endedAt?: number | null
   nonPlayingIds: string[]
+  participantIds: string[]
   playingIds: string[]
   priorityList: string[]
   playerList: string[]
@@ -75,6 +81,7 @@ export type Session = {
   stats: Record<string, MemberStats>
   arrivalCounter: number
   sessionHistory: SessionHistory[]
+  visitors: Member[]
 }
 
 export type SessionHistory = {
@@ -135,6 +142,10 @@ export const buildDefaultStats = (
       missedGames: 0,
       joinedAt: index + 1,
       waitingSince: Date.now(),
+
+  totalWaitMs: 0,
+  waitPeriods: 0,
+  averageWaitMs: 0,
     }
     return acc
   }, {})
@@ -142,7 +153,10 @@ export const buildDefaultStats = (
 export const createSession = (name: string, members: Member[]): Session => ({
   id: crypto.randomUUID(),
   name,
+  startedAt: null,
+  endedAt: null,
   nonPlayingIds: [...members.map((m) => m.id)].sort(),
+  participantIds: [],
   playingIds: [],
   priorityList: [],
   playerList: [],
@@ -163,4 +177,5 @@ export const createSession = (name: string, members: Member[]): Session => ({
   stats: buildDefaultStats(members),
   arrivalCounter: 0,
   sessionHistory: [],
+  visitors: [],
 })

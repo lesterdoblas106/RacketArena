@@ -1,0 +1,159 @@
+/* Base Button */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+
+  cursor: pointer;
+  user-select: none;
+
+  transition:
+    background-color 0.2s,
+    color 0.2s,
+    border-color 0.2s,
+    transform 0.1s;
+}
+
+.button:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px rgb(var(--ring-rgb) / 0.5);
+}
+
+.button:active {
+  transform: translateY(1px);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.button svg {
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+}
+
+/* =========================
+   Variants
+   ========================= */
+
+.button--default {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.button--default:hover {
+  opacity: 0.9;
+}
+
+.button--outline {
+  background: var(--background);
+  border-color: var(--border);
+  color: var(--foreground);
+}
+
+.button--outline:hover {
+  background: var(--muted);
+}
+
+.button--secondary {
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+}
+
+.button--secondary:hover {
+  opacity: 0.9;
+}
+
+.button--ghost {
+  background: transparent;
+  color: var(--foreground);
+}
+
+.button--ghost:hover {
+  background: var(--muted);
+}
+
+.button--destructive {
+  background: rgba(220, 38, 38, 0.1);
+  color: var(--destructive);
+}
+
+.button--destructive:hover {
+  background: rgba(220, 38, 38, 0.2);
+}
+
+.button--link {
+  background: transparent;
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.button--link:hover {
+  text-decoration: underline;
+}
+
+/* =========================
+   Sizes
+   ========================= */
+
+.button--default {
+  height: 32px;
+  padding: 0 10px;
+  gap: 6px;
+}
+
+.button--xs {
+  height: 24px;
+  padding: 0 8px;
+  gap: 4px;
+  font-size: 0.75rem;
+}
+
+.button--sm {
+  height: 28px;
+  padding: 0 10px;
+  gap: 4px;
+  font-size: 0.8rem;
+}
+
+.button--lg {
+  height: 36px;
+  padding: 0 12px;
+  gap: 6px;
+}
+
+.button--icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.button--icon-xs {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+.button--icon-sm {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+.button--icon-lg {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}

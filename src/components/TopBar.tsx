@@ -1,3 +1,6 @@
+import { InformationCircleIcon } from '@heroicons/react/24/solid'
+
+
 type TopBarProps = {
   title: string
   pageLabel: string
@@ -19,16 +22,17 @@ export function TopBar({ title, pageLabel, showHome, onHome, onInfo }: TopBarPro
 
       <div className="topbar-actions">
         <button
-          className="ghost topbar-info-btn"
+          className="topbar-info-btn"
           onClick={onInfo}
           aria-label={`How to use ${pageLabel}`}
           title={`How to use ${pageLabel}`}
         >
-          i
+          <InformationCircleIcon width={16} height={16} />
         </button>
 
         {showHome && (
-          <button className="ghost topbar-home-btn" onClick={onHome}>
+          <button className="topbar-home-btn" 
+          onClick={onHome}>
             <svg
               aria-hidden="true"
               viewBox="0 0 20 20"
@@ -41,5 +45,6 @@ export function TopBar({ title, pageLabel, showHome, onHome, onInfo }: TopBarPro
         )}
       </div>
     </header>
+    
   )
 }

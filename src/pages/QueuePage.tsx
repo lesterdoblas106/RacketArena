@@ -1,7 +1,9 @@
 import { useEffect,  useState } from 'react'
 import { Modal } from '../components/Modal'
 import type { Member, MemberStats, Session } from '../types/app'
-
+import { TrophyIcon, FlagIcon, TrashIcon, BoltIcon, ArrowPathRoundedSquareIcon, PaperAirplaneIcon } from '@heroicons/react/24/solid'
+import { Timer, Watch } from 'lucide-react'
+import { toast } from 'sonner'
 
 type QueuePageProps = {
   session: Session
@@ -15,12 +17,15 @@ type QueuePageProps = {
   onRemoveCourt: (courtId: string) => void
   onRenameCourt: (courtId: string, name: string) => void
   onEndMatch: (courtId: string, scoreA: number, scoreB: number) => void
+  forfeitMatch: (courtId: string) => void
+
   onGenerateRoster: () => void
   onQueueManualRoster: () => void
   onAssignToCourt: (rosterId: string, courtId?: string) => void
   onDissolveRoster: (rosterId: string) => void
   onReplaceRosterPlayer: (rosterId: string, slotIndex: number, memberId: string) => void
   onToggleManualPick: (memberId: string) => void
+
   getSessionPlayerStatus: (
     memberId: string,
     session: Session,
@@ -28,7 +33,6 @@ type QueuePageProps = {
   skillScore: (skill: Member['skill']) => number
   onShuffleRoster: (rosterId: string) => void
   buildQueueList: (session: Session) => string[]
-  forfeitMatch: (courtId: string) => void
 }
 
 export function QueuePage({
@@ -41,6 +45,8 @@ export function QueuePage({
   onRemoveCourt,
   onRenameCourt,
   onEndMatch,
+  forfeitMatch,
+
   onGenerateRoster,
   onQueueManualRoster,
   onAssignToCourt,
@@ -51,9 +57,11 @@ export function QueuePage({
   skillScore,
   onShuffleRoster,
   buildQueueList,
-  forfeitMatch,
 }: QueuePageProps) {
-  const [, setClock] = useState(0)
+  const [clock, setClock] = useState(() => Date.now())
+  const isQueueEnded = Boolean(session.endedAt)
+  const isQueueStarted = Boolean(session.startedAt)
+  const now = session.endedAt ?? clock
   const [resultModal, setResultModal] = useState<{
     courtId: string
     courtLabel: string
@@ -72,6 +80,13 @@ export function QueuePage({
     rosterId: string
     availableCourts: string[]
   } | null>(null)
+  
+  const [forfeitModal, setForfeitModal] = useState<{
+    courtId: string
+    courtName: string
+    teamA:string[]
+    teamB:string[]
+  } | null>(null)
 
   const skillBorderClass = (skill: Member['skill']) =>
     ({
@@ -89,8 +104,15 @@ export function QueuePage({
       (court) => court.teamA.length === 0 && court.teamB.length === 0
     ).map(c => c.id)
   }
+  const activeCount =
+  session.courts.length - getVacantCourts().length
 
   const handlePlayClick = (rosterId: string) => {
+    if (!isQueueStarted) {
+      toast.warning('Please start the queue before sending players to a court.')
+      return
+    }
+
     const vacantCourts = getVacantCourts()
     if (vacantCourts.length >= 2) {
       setCourtSelectionModal({
@@ -117,7 +139,7 @@ export function QueuePage({
 
   const formatElapsed = (startedAt: number | null) => {
     if (!startedAt) return '00:00'
-    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+    const elapsedSeconds = Math.max(0, Math.floor((now - startedAt) / 1000))
     const mins = String(Math.floor(elapsedSeconds / 60)).padStart(2, '0')
     const secs = String(elapsedSeconds % 60).padStart(2, '0')
     return `${mins}:${secs}`
@@ -136,11 +158,48 @@ export function QueuePage({
     return `${first} & ${second} wins!`
   }
 
-  const formatWaitingTime = (waitingSince: number) => {
-    const elapsed = Math.max(0, Date.now() - waitingSince)
-    const minutes = String(Math.floor(elapsed / 60000)).padStart(2, '0')
-    const seconds = String(Math.floor((elapsed % 60000) / 1000)).padStart(2, '0')
+
+  const formatDurationMs = (durationMs?: number,): string => {
+    if (!durationMs) return '00:00'
+    const minutes = String(Math.floor(durationMs / 60000)).padStart(2, '0')
+    const seconds = String(Math.floor((durationMs % 60000) / 1000,),).padStart(2, '0')
     return `${minutes}:${seconds}`
+  }
+  const getFairnessScore = (memberId: string) => {
+    if (!session.startedAt) return 0
+
+    const stats = session.stats[memberId]
+
+    const currentWait =
+      Math.max(0, now - stats.waitingSince)
+
+    const averageWait =
+      stats.averageWaitMs ?? 0
+
+    return (
+      currentWait * 0.7 +
+      averageWait * 0.3
+    )
+  }
+  const getSkillScore = (skill: Member['skill']) => {
+    switch (skill) {
+      case 'Newbie':
+        return 1
+      case 'Beginner':
+        return 2
+      case 'Low Intermediate':
+        return 3
+      case 'Intermediate':
+        return 4
+      case 'High Intermediate':
+        return 5
+      case 'Advanced':
+        return 6
+      case 'Elite':
+        return 7
+      default:
+        return '?'
+    }
   }
 
   const getTeamSkillTotal = (playerIds: string[]) =>
@@ -154,135 +213,168 @@ export function QueuePage({
       return total + skillScore(member.skill) + 1
     }, 0)
 
-const getTotalGames = (
-  stats: MemberStats,
-) => {
-  return (
-    stats.gamesPlayed +
-    stats.missedGames
-  )
-}
-
-const getSortedPlayers = () => {
-  const queueList =
-    buildQueueList(session)
-
-  const queueOrderMap = new Map(
-    queueList.map((id, index) => [
-      id,
-      index,
-    ]),
-  )
-
-  const allPlayers =
-    session.playingIds.map((id) => ({
-      id,
-      status:
-        getSessionPlayerStatus(
-          id,
-          session,
-        ),
-      stats: session.stats[id],
-    }))
-
-  if (playersSort === 'queue') {
-    return [...allPlayers].sort(
-      (a, b) => {
-        const aIndex =
-          queueOrderMap.get(a.id) ??
-          Infinity
-
-        const bIndex =
-          queueOrderMap.get(b.id) ??
-          Infinity
-
-        return aIndex - bIndex
-      },
+  const getTotalGames = (
+    stats: MemberStats,
+  ) => {
+    return (
+      stats.gamesPlayed +
+      stats.missedGames
     )
   }
 
-  const sortByCategory = (
-    a: {
-      id: string
-      stats: MemberStats
-    },
-    b: {
-      id: string
-      stats: MemberStats
-    },
-  ) => {
-    if (playersSort === 'totalGames') {
-      return (
-        getTotalGames(b.stats) -
-        getTotalGames(a.stats)
-      )
-    }
-
-    if (playersSort === 'wins') {
-      return (
-        b.stats.wins -
-        a.stats.wins
-      )
-    }
-
-    if (playersSort === 'skill') {
-      return (
-        skillScore(
-          memberById[b.id].skill,
-        ) -
-        skillScore(
-          memberById[a.id].skill,
-        )
-      )
-    }
-
-    if (playersSort === 'name') {
-      return memberById[
-        a.id
-      ].name.localeCompare(
-        memberById[b.id].name,
-      )
-    }
-
-    return 0
+  const getCurrentWaitMs = (stats: MemberStats) => {
+    if (!session.startedAt) return 0
+    return Math.max(0, now - stats.waitingSince)
   }
 
-  return [...allPlayers].sort(
-    sortByCategory,
-  )
-}
+  const getSortedPlayers = () => {
+    const queueList =
+      buildQueueList(session)
+
+    const queueOrderMap = new Map(
+      queueList.map((id, index) => [
+        id,
+        index,
+      ]),
+    )
+
+    const allPlayers =
+      session.playingIds.map((id) => ({
+        id,
+        status:
+          getSessionPlayerStatus(
+            id,
+            session,
+          ),
+        stats: session.stats[id],
+      }))
+
+    if (playersSort === 'queue') {
+      return [...allPlayers].sort(
+        (a, b) => {
+          const aIndex =
+            queueOrderMap.get(a.id) ??
+            Infinity
+
+          const bIndex =
+            queueOrderMap.get(b.id) ??
+            Infinity
+
+          return aIndex - bIndex
+        },
+      )
+    }
+
+    const sortByCategory = (
+      a: {
+        id: string
+        stats: MemberStats
+      },
+      b: {
+        id: string
+        stats: MemberStats
+      },
+    ) => {
+      if (playersSort === 'totalGames') {
+        return (
+          getTotalGames(b.stats) -
+          getTotalGames(a.stats)
+        )
+      }
+
+      if (playersSort === 'wins') {
+        return (
+          b.stats.wins -
+          a.stats.wins
+        )
+      }
+
+      if (playersSort === 'skill') {
+        return (
+          skillScore(
+            memberById[b.id].skill,
+          ) -
+          skillScore(
+            memberById[a.id].skill,
+          )
+        )
+      }
+
+      if (playersSort === 'name') {
+        return memberById[
+          a.id
+        ].name.localeCompare(
+          memberById[b.id].name,
+        )
+      }
+
+      return 0
+    }
+
+    return [...allPlayers].sort(
+      sortByCategory,
+    )
+  }
 
   const sortedPlayers = getSortedPlayers()
+  const inGameCount = sortedPlayers.filter(
+    ({ status }) => status === 'playing'
+  ).length
+
+  const queueCount = sortedPlayers.filter(
+    ({ status }) => status === 'queueing'
+  ).length
+
+  const waitingCount = sortedPlayers.filter(
+    ({ status }) => status === 'waiting'
+  ).length
+  const totalPlayers = sortedPlayers.length
 
   return (
-    <section className="stack">
-      <article className="card">
-        <div className="session-head">
-          {/* <h3>{session.name} - {dateLabel}</h3> */}
-          {/* <p>Courts: {session.courts.length}</p> */}
-        </div>
-        <div className="section-title">
-          <h3>Court Section ({session.courts.length})
-          <button onClick={onAddCourt}
-            title="Add Court"
+    <section className="queue-layout">
+      <article className="card courts-panel">
+        <header className="court-header">
+          <div className="court-header-info">
+            <h3 className="court-title">Courts</h3>
+
+            <span className="court-badge court-badge-active">
+              {activeCount} in play
+            </span>
+
+            <span className="court-badge court-badge-open">
+              {session.courts.length - activeCount} open
+            </span>
+          </div>
+
+          <button
+            onClick={onAddCourt}
+            className="court-add-button"
+            disabled={isQueueEnded}
           >
             <svg xmlns="http://www.w3.org/2000/svg" 
             height="24px" 
             viewBox="0 -960 960 960" 
-            width="24px" fill="#1f1f1f">
+            width="24px" fill="#ffffff">
             <path d="M520-320h200v-320H520v320Zm-280 0h200v-320H240v320Zm520-320v-80h-80v-80h80v-80h80v80h80v80h-80v80h-80ZM160-240v-480 480Zm720-320v320q0 33-23.5 56.5T800-160H160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h440v80H160v480h640v-320h80Z"/>
           </svg>
-          </button></h3>
-        </div>
+          </button>
+        </header>
+
         <div className="court-grid">
-          {session.courts.map((court, idx) => (
-            <div key={court.id} className="court">
-              <div className="section-title">
+          {session.courts.map((court, idx) => {
+            const active = court.teamA.length > 0 || court.teamB.length > 0
+            return (
+            <div key={court.id}             
+              className={`court ${
+                court.teamA.length > 0 ? 'court-active' : ''
+              }`}>
+              <div className="court-card-header">
                 <input
                   className="court-name-input"
                   aria-label={`Court ${idx + 1} name`}
-                  value={court.name ?? `Court ${idx + 1}`}
-                  onChange={(event) => onRenameCourt(court.id, event.target.value)}
+                  value={court.name}
+                    onChange={(event) => onRenameCourt(court.id, event.target.value)}
+                  disabled={isQueueEnded}
                   onBlur={(event) =>
                     onRenameCourt(
                       court.id,
@@ -290,40 +382,70 @@ const getSortedPlayers = () => {
                     )
                   }
                 />
-                {court.teamA.length === 0 && court.teamB.length === 0 && (
+                {active ? (
+                    <span className="live-badge">
+                      <span className="live-dot"></span>
+                    LIVE
+                  </span>
+                ) : (
                   <button
-                  className="icon-btn remove-btn" 
-                  onClick={() => onRemoveCourt(court.id)} 
-                  title='Remove Court'> 
-                  <svg xmlns="http://www.w3.org/2000/svg" 
-                  viewBox="0 0 24 24" 
-                  fill="currentColor" 
-                  className="size-6"                  
-                  style={{ width: '20px', height: '20px' }} 
+                    onClick={() => onRemoveCourt(court.id)}
+                    aria-label="Remove court"
+                    className="court-remove-button"
+                    disabled={isQueueEnded}
                   >
-                    <path fillRule="evenodd" d="M16.5 4.478v.227a48.816 48.816 0 0 1 3.878.512.75.75 0 1 1-.256 1.478l-.209-.035-1.005 13.07a3 3 0 0 1-2.991 2.77H8.084a3 3 0 0 1-2.991-2.77L4.087 6.66l-.209.035a.75.75 0 0 1-.256-1.478A48.567 48.567 0 0 1 7.5 4.705v-.227c0-1.564 1.213-2.9 2.816-2.951a52.662 52.662 0 0 1 3.369 0c1.603.051 2.815 1.387 2.815 2.951Zm-6.136-1.452a51.196 51.196 0 0 1 3.273 0C14.39 3.05 15 3.684 15 4.478v.113a49.488 49.488 0 0 0-6 0v-.113c0-.794.609-1.428 1.364-1.452Zm-.355 5.945a.75.75 0 1 0-1.5.058l.347 9a.75.75 0 1 0 1.499-.058l-.346-9Zm5.48.058a.75.75 0 1 0-1.498-.058l-.347 9a.75.75 0 0 0 1.5.058l.345-9Z" clipRule="evenodd" />
-                  </svg>
-
+                    <TrashIcon width={16} height={16}  className="court-remove-icon" />
                   </button>
                 )}
               </div>
               {court.teamA.length === 0 ? (
-                <p className="available">Available</p>
+                <p className="court-status-open">Available — assign a match</p>
               ) : (
                 <>
-                  <p>
-                    Start Time: <strong>{formatClock(court.startedAt ?? Date.now())}</strong>
-                  </p>
-                  <p>
-                    Elapsed Time: <strong>{formatElapsed(court.startedAt)}</strong>
-                  </p>
-                  <p className="court-center court-matchline">
-                    <strong>{memberById[court.teamA[0]]?.name} & {memberById[court.teamA[1]]?.name}</strong> vs{' '}
-                    <strong>{memberById[court.teamB[0]]?.name} & {memberById[court.teamB[1]]?.name}</strong>
-                  </p>
-                  <div className="score-row">
+                  <div className="court-time-row">
+                    <span>
+                      ⏱ {formatElapsed(court.startedAt)}
+                    </span>
+                    <span>
+                      ▶︎ <strong>{formatClock(court.startedAt ?? now)}</strong>
+                    </span>
+
+                  </div>
+                  <div className="court-match">
+                    <div className="court-team">
+                      <strong>{memberById[court.teamA[0]]?.name}</strong>
+                      <span>{memberById[court.teamA[1]]?.name}</span>
+                    </div>
+
+                    <div className="court-vs">
+                      vs
+                    </div>
+
+                    <div className="court-team court-team-right">
+                      <strong>{memberById[court.teamB[0]]?.name}</strong>
+                      <span>{memberById[court.teamB[1]]?.name}</span>
+                    </div>
+                  </div>
+                  <div className="court-actions">
+                    
                     <button
-                      className="primary"
+                      className="forfeit-btn"
+                      disabled={isQueueEnded}
+                      onClick={() => {
+                        setForfeitModal({
+                          courtId: court.id,
+                          courtName: court.name ?? 
+                          `Court ${session.courts.findIndex((c) => c.id === court.id) + 1}`,
+                          teamA: [...court.teamA],
+                          teamB: [...court.teamB],
+                        })
+                      }}
+                    >
+                      <FlagIcon width={16} height={16} />
+                      <span className="button-label">Forfeit</span>
+                    </button>
+                    <button className="end-match-btn"
+                      disabled={isQueueEnded}
                       onClick={() =>
                         setResultModal({
                           courtId: court.id,
@@ -334,120 +456,137 @@ const getSortedPlayers = () => {
                           scoreA: 0,
                           scoreB: 0,
                         })
-                      }
-                    >
-                      End Match
+                      }>
+                      <TrophyIcon width={16} height={16} />
+                      <span className="button-label">End Match</span>
                     </button>
-                    <button
-                      className="ghost small"
-                      onClick={() => {
-                        forfeitMatch(court.id)}
-                      }
-                    >
-                      Forfeit
-                    </button>
+
                   </div>
                 </>
               )}
             </div>
-          ))}
+          )})}
         </div>
       </article>
 
-      <article className="card">
-        <div className="section-title">
-          <h3>Match Making</h3>
-        </div>
+      <article className="card queue-panel">
+        <header className="matchmaking-header">
+          <div className="matchmaking-header-info">
+            <h2 className="matchmaking-title">Match Making</h2>
+
+            <span className="matchmaking-badge">
+              {session.rosters.length} queued
+            </span>
+          </div>
+
+        </header>
         <div className="court-grid">
           {session.rosters.map((roster, idx) => {
             const teamAIds = roster.playerIds.slice(0, 2)
             const teamBIds = roster.playerIds.slice(2, 4)
 
-            return (
-            <div key={roster.id} className="queue-card">
-              <strong>Queue {idx + 1}</strong>
-                          
-            <div className="compact-roster-lines">
-              <div className="roster-line team-a">
-                <div className="roster-team-players">
-                  {teamAIds.map((memberId, slotIndex) => (
-                    <button
-                      key={`${roster.id}-${memberId}-${slotIndex}`}
-                      className="link-btn compact-roster-player"
-                      onClick={() =>
-                        setReplaceModal({
-                          rosterId: roster.id,
-                          slotIndex,
-                          currentMemberId: memberId,
-                        })
-                      }
-                    >
-                      {memberById[memberId]?.name ?? 'Unknown'}
-                    </button>
-                  )).reduce((prev, curr) => [prev, ' - ', curr] as any)}
-                </div>
-                <span className="team-skill-total" title="Team skill total">
-                  {getTeamSkillTotal(teamAIds)}
-                </span>
-              </div>
+            const skillA = getTeamSkillTotal(teamAIds)
+            const skillB = getTeamSkillTotal(teamBIds)
 
-              <div className="roster-line team-b">
-                <div className="roster-team-players">
-                  {teamBIds.map((memberId, slotIndex) => (
-                    <button
-                      key={`${roster.id}-${memberId}-${slotIndex + 2}`}
-                      className="link-btn compact-roster-player"
-                      onClick={() =>
-                        setReplaceModal({
-                          rosterId: roster.id,
-                          slotIndex: slotIndex + 2,
-                          currentMemberId: memberId,
-                        })
-                      }
-                    >
-                      {memberById[memberId]?.name ?? 'Unknown'}
-                    </button>
-                  )).reduce((prev, curr) => [prev, ' - ', curr] as any)}
-                </div>
-                <span className="team-skill-total" title="Team skill total">
-                  {getTeamSkillTotal(teamBIds)}
+            const diff = Math.abs(skillA - skillB)
+            const balanced = diff <= 1
+
+            return (
+            <div
+              key={roster.id}
+              className={`queue-card ${
+                balanced
+                  ? "queue-card-balanced"
+                  : "queue-card-unbalanced"
+              }`}
+            >
+              <div className="queue-header">
+                <strong>Queue {idx + 1}</strong>
+
+                <span
+                  className={
+                    balanced
+                      ? "queue-balance queue-balance-good"
+                      : "queue-balance queue-balance-warning"
+                  }
+                >
+                  {balanced ? "Balanced" : `+${diff} Gap`}
                 </span>
               </div>
-            </div>
+                          
+              <div className="compact-roster-lines">
+                <div className="roster-line team-a">
+                  <div className="roster-team-players">
+                    {teamAIds.map((memberId, slotIndex) => (
+                      <button
+                        key={`${roster.id}-${memberId}-${slotIndex}`}
+                        className="link-btn compact-roster-player"
+                        disabled={isQueueEnded}
+                        onClick={() =>
+                          setReplaceModal({
+                            rosterId: roster.id,
+                            slotIndex,
+                            currentMemberId: memberId,
+                          })
+                        }
+                      >
+                        {memberById[memberId]?.name ?? 'Unknown'}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="team-skill-total" title="Team skill total">
+                    {getTeamSkillTotal(teamAIds)}
+                  </span>
+                </div>
+
+                <div className="roster-line team-b">
+                  <div className="roster-team-players">
+                    {teamBIds.map((memberId, slotIndex) => (
+                      <button
+                        key={`${roster.id}-${memberId}-${slotIndex + 2}`}
+                        className="link-btn compact-roster-player"
+                        disabled={isQueueEnded}
+                        onClick={() =>
+                          setReplaceModal({
+                            rosterId: roster.id,
+                            slotIndex: slotIndex + 2,
+                            currentMemberId: memberId,
+                          })
+                        }
+                      >
+                        {memberById[memberId]?.name ?? 'Unknown'}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="team-skill-total" title="Team skill total">
+                    {getTeamSkillTotal(teamBIds)}
+                  </span>
+                </div>
+              </div>
               {/* Buttons */}
               <div className="row-actions">
-                {/* Shuffle */}
-                <button onClick={() => onShuffleRoster(roster.id)}
-                  title='Shuffle Players'>
-                  <svg xmlns="http://www.w3.org/2000/svg" 
-                  viewBox="0 0 20 20" fill="currentColor" 
-                  className="size-5"                  
-                  style={{ width: '24px', height: '24px' }} >
-                    <path fillRule="evenodd" d="M10 4.5c1.215 0 2.417.055 3.604.162a.68.68 0 0 1 .615.597c.124 1.038.208 2.088.25 3.15l-1.689-1.69a.75.75 0 0 0-1.06 1.061l2.999 3a.75.75 0 0 0 1.06 0l3.001-3a.75.75 0 1 0-1.06-1.06l-1.748 1.747a41.31 41.31 0 0 0-.264-3.386 2.18 2.18 0 0 0-1.97-1.913 41.512 41.512 0 0 0-7.477 0 2.18 2.18 0 0 0-1.969 1.913 41.16 41.16 0 0 0-.16 1.61.75.75 0 1 0 1.495.12c.041-.52.093-1.038.154-1.552a.68.68 0 0 1 .615-.597A40.012 40.012 0 0 1 10 4.5ZM5.281 9.22a.75.75 0 0 0-1.06 0l-3.001 3a.75.75 0 1 0 1.06 1.06l1.748-1.747c.042 1.141.13 2.27.264 3.386a2.18 2.18 0 0 0 1.97 1.913 41.533 41.533 0 0 0 7.477 0 2.18 2.18 0 0 0 1.969-1.913c.064-.534.117-1.071.16-1.61a.75.75 0 1 0-1.495-.12c-.041.52-.093 1.037-.154 1.552a.68.68 0 0 1-.615.597 40.013 40.013 0 0 1-7.208 0 .68.68 0 0 1-.615-.597 39.785 39.785 0 0 1-.25-3.15l1.689 1.69a.75.75 0 0 0 1.06-1.061l-2.999-3Z" clipRule="evenodd" />
-                  </svg>
-                </button>
-
-                {/* Dissolve */}
-                <button className="danger" onClick={() => onDissolveRoster(roster.id)}
-                  title='Dissolve Roster'>
-                  <svg xmlns="http://www.w3.org/2000/svg" 
-                  height="24px" viewBox="0 -960 960 960" 
-                  width="24px" 
-                  fill="currentColor">
-                    <path d="m609-181 70-70 70 70 30-30-69-69 70-70-30-30-70 70-70-70-30 30 70 70-70 70 29 29Zm-489 21v-640l572 240h-12q-35 0-66 8t-60 22L200-680v140l240 60-240 60v140l216-92q-8 23-12 45.5t-4 46.5v2L120-160Zm418.5 21.5Q480-197 480-280t58.5-141.5Q597-480 680-480t141.5 58.5Q880-363 880-280t-58.5 141.5Q763-80 680-80t-141.5-58.5ZM200-372v-308 400-92Z"/></svg>
-                </button>
-
-                {/* Play */}
-                <button className="play" onClick={() => handlePlayClick(roster.id)}
-                  title='Assign to Court'>
-                  <svg xmlns="http://www.w3.org/2000/svg" 
-                  viewBox="0 0 20 20" 
-                  fill="currentColor" 
-                  className="size-5"
-                  style={{ width: '20px', height: '20px' }} >
-                    <path d="M6.3 2.84A1.5 1.5 0 0 0 4 4.11v11.78a1.5 1.5 0 0 0 2.3 1.27l9.344-5.891a1.5 1.5 0 0 0 0-2.538L6.3 2.841Z" />
-                  </svg>
                 
+                <button
+                  className="queue-action-btn"
+                  disabled={isQueueEnded}
+                  onClick={() => onShuffleRoster(roster.id)}
+                >
+                  <ArrowPathRoundedSquareIcon width={16} height={16}/>
+                </button>
+                <button
+                  className="queue-action-btn danger"
+                  disabled={isQueueEnded}
+                  onClick={() => onDissolveRoster(roster.id)}
+                >
+                  <TrashIcon width={16} height={16}/>
+                </button>
+                <button
+                  className="queue-play-btn"
+                  disabled={isQueueEnded}
+                  onClick={() => handlePlayClick(roster.id)}
+                >
+                  <PaperAirplaneIcon width={16} height={16}/>
+                  <span className="button-label">Send to Court</span>
                 </button>
                 
               </div>
@@ -456,69 +595,133 @@ const getSortedPlayers = () => {
           })}
         </div>
         
-          <div className="actions generate-row">
-            <button className="primary generate-btn" onClick={onGenerateRoster}>
-              Generate
-            </button>
-          </div>
       </article>
 
-      <article className="card">
+      <article className="card players-panel">
         
         <div className="players-header">
-          <h3>Players List</h3>
-          <select
-            value={playersSort}
-            onChange={(e) => onChangePlayersSort(e.target.value as typeof playersSort)}
-          >
-            <option value="queue">Current Queue</option>
-            <option value="totalGames">Total Games</option>
-            <option value="wins">Wins</option>
-            <option value="skill">Skill Level</option>
-            <option value="name">Name</option>
-          </select>
+          <div className="players-header-top">
+            <div className="players-title-group">
+              <h3>
+                Players
+                <span className="players-count">
+                  {totalPlayers}
+                </span>
+              </h3>
+              
+            </div>
+            <select
+              value={playersSort}
+              onChange={(e) => onChangePlayersSort(e.target.value as typeof playersSort)}
+            >
+              <option value="queue">Current Queue</option>
+              <option value="totalGames">Total Games</option>
+              <option value="wins">Wins</option>
+              <option value="skill">Skill Level</option>
+              <option value="name">Name</option>
+            </select>
+          </div>
+
+          <div className="players-summary"> 
+            <span className="status-badge status-badge-playing">
+              {inGameCount} In Game
+            </span>
+
+            <span className="status-badge status-badge-queue">
+              {queueCount} Queued
+            </span>
+
+            <span className="status-badge status-badge-waiting">
+              {waitingCount} Waiting
+            </span>
+          </div>
+            
+            
+          <div className="actions generate-row">            
+            <button
+              onClick={onGenerateRoster}
+              className="matchmaking-generate-btn"
+              disabled={isQueueEnded}
+            >
+              <BoltIcon className="matchmaking-btn-icon" />
+              <span className="matchmaking-btn-label">
+                Generate Match
+              </span>
+            </button>
+          </div>
+          
         </div>
         <div className="list player-grid">
-          {sortedPlayers.map(({ id: memberId, status, stats }) => (
-          <button
-            key={memberId}
-            className={`row row-table row-skill queue-player-card ${status} ${
-              manualPickIds.includes(memberId) ? 'queue-player-selected' : ''
-            } ${skillBorderClass(memberById[memberId].skill)}`}
-            disabled={status === 'queueing'}
-            onClick={() => {
-              if (status !== 'queueing') {
-                onToggleManualPick(memberId)
-              }
-            }}
-          >
+          {sortedPlayers.map(({ id: memberId, status, stats }) => {
+            const pickIndex = manualPickIds.indexOf(memberId)
 
-            <div className="queue-player-top">
-              <strong>{memberById[memberId].name}</strong>
+            let manualPickClass = ''
+            if (pickIndex >= 0) {
+              manualPickClass =
+                pickIndex < 2
+                  ? 'queue-player-selected-team-a'
+                  : 'queue-player-selected-team-b'
+            }
 
-              {manualPickIds.includes(memberId) ? (
-                <span className="queue-selected-badge">Selected</span>
-              ) : (
-                <span className="queue-player-stats">                
-                    G:{stats.gamesPlayed}  W:{stats.wins}
-                    {stats.missedGames > 0 ? `  M:${stats.missedGames}` : ''}
-                </span>
-              )}
-            </div>
+            return (
+              <button
+                key={memberId}
+                className={`row row-table row-skill queue-player-card ${status} ${manualPickClass} ${skillBorderClass(memberById[memberId].skill)}`}
+                disabled={isQueueEnded || status === 'queueing'}
+                onClick={() => {
+                  if (status !== 'queueing') {
+                    onToggleManualPick(memberId)
+                  }
+                }}
+              >
+                <div className="queue-player-top">
+                  <strong>
+                    {memberById[memberId].name} - S
+                    {getSkillScore(memberById[memberId].skill)}
+                  </strong>
 
-            <div className="queue-player-bottom">
-              <span className="compact-skill">
-                {memberById[memberId].skill}
-              </span>
+                  <span className="queue-player-score">
+                    {pickIndex >= 0 ? (
+                      <span
+                        className={`queue-selected-badge ${
+                          pickIndex < 2
+                            ? 'queue-selected-badge-team-a'
+                            : 'queue-selected-badge-team-b'
+                        }`}
+                      >
+                        {pickIndex < 2 ? 'Team A' : 'Team B'}
+                      </span>
+                    ) : status === 'playing' ? (
+                      ''
+                    ) : (
+                      <>
+                        <Watch size={16} />
+                        {Math.round(getFairnessScore(memberId) / 60000)}
+                      </>
+                    )}
+                  </span>
+                </div>
 
-              <span className="queue-player-time">
-                {status === 'playing'
-                    ? 'In Game'
-                    : formatWaitingTime(stats.waitingSince)}
-              </span>
-            </div>
-            </button>
-          ))}
+                <div className="queue-player-bottom">
+                  <span className="queue-player-stats">
+                    G:{stats.gamesPlayed} W:{stats.wins}
+                    {stats.missedGames > 0 ? ` M:${stats.missedGames}` : ''}
+                  </span>
+
+                  <span className="queue-player-time">
+                    {status === 'playing' ? (
+                      'In Game'
+                    ) : (
+                      <>
+                        <Timer size={14} />
+                        {formatDurationMs(getCurrentWaitMs(stats))}
+                      </>
+                    )}
+                  </span>
+                </div>
+              </button>
+            )
+          })}
         </div>
       </article>
 
@@ -541,15 +744,38 @@ const getSortedPlayers = () => {
             .map((memberId) => (
               <button
                 key={memberId}
-                className={`row ${memberId === replaceModal?.currentMemberId ? 'selected' : ''}`}
+                className={`replace-player-btn ${
+                  memberId === replaceModal?.currentMemberId
+                    ? 'replace-player-btn-selected'
+                    : ''
+                }`}
                 onClick={() => {
                   if (!replaceModal) return
-                  onReplaceRosterPlayer(replaceModal.rosterId, replaceModal.slotIndex, memberId)
+
+                  onReplaceRosterPlayer(
+                    replaceModal.rosterId,
+                    replaceModal.slotIndex,
+                    memberId,
+                  )
+
                   setReplaceModal(null)
                 }}
               >
-                <span>{memberById[memberId]?.name ?? 'Unknown'}</span>
-                <span>{memberById[memberId]?.skill ?? ''}</span>
+              <>
+              <span className="replace-player-info">
+                <span
+                  className={`skill-dot ${skillBorderClass(memberById[memberId].skill)}`}
+                />
+
+                <span className="replace-player-name">
+                  {memberById[memberId]?.name ?? 'Unknown'}
+                </span>
+              </span>
+
+              <span className="replace-player-skill">
+                {memberById[memberId]?.skill ?? ''}
+              </span>
+            </>
               </button>
             ))}
         </div>
@@ -756,14 +982,68 @@ const getSortedPlayers = () => {
         </div>
       </Modal>
       
-      {manualPickIds.length === 4 && (
-        <button
-          className="floating-match-btn primary"
-          onClick={onQueueManualRoster}
-        >
-          Create Match
-        </button>
+      {manualPickIds.length > 0 && (
+        <div className="floating-selection-panel">
+          {manualPickIds.length < 4 ? (
+            <span className="selection-count">
+              Players Selected {manualPickIds.length}/4
+            </span>
+          ) : (
+            <button
+              className="floating-match-btn primary"
+              disabled={isQueueEnded}
+              onClick={onQueueManualRoster}
+            >
+              Create Match
+            </button>
+          )}
+        </div>
       )}
+      <Modal
+        open={Boolean(forfeitModal)}
+        title="Forfeit Match?"
+        onClose={() => setForfeitModal(null)}
+        footer={
+          <>
+            <button onClick={() => setForfeitModal(null)}>
+              Cancel
+            </button>
+
+            <button
+              className="danger"
+              onClick={() => {
+                if (!forfeitMatch) return
+
+                forfeitMatch(forfeitModal!.courtId)
+
+                setForfeitModal(null)
+              }}
+            >
+              Forfeit
+            </button>
+          </>
+        }
+      >
+        <p>Forfeit the match on "{forfeitModal?.courtName}"?</p>
+
+        <p>
+          <strong>Team A</strong>
+          <br />
+          {forfeitModal?.teamA
+            .map((id) => memberById[id]?.name ?? id)
+            .join(', ')}
+        </p>
+
+        <p>
+          <strong>Team B</strong>
+          <br />
+          {forfeitModal?.teamB
+            .map((id) => memberById[id]?.name ?? id)
+            .join(', ')}
+        </p>
+
+        <p>This will immediately end the current match.</p>
+      </Modal>
     </section>
       
   )

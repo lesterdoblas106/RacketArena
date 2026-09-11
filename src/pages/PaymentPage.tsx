@@ -13,8 +13,8 @@ type PaymentRecord = {
 type PaymentState = {
   courtFee: number
   numOfHours: number
-  shuttlecockPerTube: number
-  numberOfTube: number
+  shuttlecocksUsed: number
+  costPerTube: number
   individualPayment: number
   sortBy: PaymentSort
   payments: Record<string, PaymentRecord>
@@ -44,8 +44,8 @@ const getPaymentStorageKey = (sessionId: string) =>
 const defaultPaymentState: PaymentState = {
   courtFee: 0,
   numOfHours: 0,
-  shuttlecockPerTube: 0,
-  numberOfTube: 0,
+  shuttlecocksUsed: 0,
+  costPerTube: 0,
   individualPayment: 0,
   sortBy: 'alphabetical',
   payments: {},
@@ -76,8 +76,8 @@ export function PaymentPage({ session, memberById }: PaymentPageProps) {
   const {
     courtFee,
     numOfHours,
-    shuttlecockPerTube,
-    numberOfTube,
+    shuttlecocksUsed,
+    costPerTube,
     individualPayment,
     sortBy,
     payments,
@@ -92,23 +92,18 @@ export function PaymentPage({ session, memberById }: PaymentPageProps) {
 
   const playerIds = useMemo(
     () => {
-      const participatedIds = new Set([
-        ...session.playingIds,
-        ...Object.entries(session.stats)
-          .filter(([, stats]) => stats.gamesPlayed >= 1)
-          .map(([memberId]) => memberId),
-      ])
+      const participantIds = new Set(session.participantIds ?? [])
 
-      return [...participatedIds]
+      return [...participantIds]
         .filter((memberId) => memberById[memberId])
         .sort((a, b) => memberById[a].name.localeCompare(memberById[b].name))
     },
-    [session.playingIds, session.stats, memberById],
+    [session.participantIds, memberById],
   )
 
   const sharedTotal =
     courtFee * numOfHours +
-    shuttlecockPerTube * numberOfTube
+    shuttlecocksUsed * costPerTube
 
   const contribution =
     playerIds.length > 0
@@ -181,8 +176,8 @@ export function PaymentPage({ session, memberById }: PaymentPageProps) {
       PaymentState,
       | 'courtFee'
       | 'numOfHours'
-      | 'shuttlecockPerTube'
-      | 'numberOfTube'
+      | 'shuttlecocksUsed'
+      | 'costPerTube'
       | 'individualPayment'
     >,
     step = '1',
@@ -209,9 +204,9 @@ export function PaymentPage({ session, memberById }: PaymentPageProps) {
       <article className="card payment-summary-card">
         <div className="payment-input-grid">
           {numberInput('Court Fee', courtFee, 'courtFee')}
-          {numberInput('Number of Hours', numOfHours, 'numOfHours')}
-          {numberInput('Shuttlecock Per Tube', shuttlecockPerTube, 'shuttlecockPerTube')}
-          {numberInput('Number Of Tube/s      ', numberOfTube, 'numberOfTube', '0.1')}
+          {numberInput('Hours Played', numOfHours, 'numOfHours')}
+          {numberInput('Shuttlecocks Used (Tube)', shuttlecocksUsed, 'shuttlecocksUsed')}
+          {numberInput('Cost Per Tube', costPerTube, 'costPerTube', '0.1')}
           {numberInput('Individual Payment', individualPayment, 'individualPayment')}
         </div>
 
@@ -271,7 +266,7 @@ export function PaymentPage({ session, memberById }: PaymentPageProps) {
 
         <div className="payment-list">
           {sortedPlayerIds.length === 0 && (
-            <p className="available">No players have participated yet.</p>
+            <p className="available">No participants have been selected yet.</p>
           )}
 
           {sortedPlayerIds.length > 0 && (

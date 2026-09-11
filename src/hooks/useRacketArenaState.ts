@@ -13,14 +13,26 @@ import {
 } from '../types/app'
 import { toast } from 'sonner'
 
+const capitalizeName = (name: string) =>
+  name ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : name
+
 export function useRacketArenaState() {
-  const initial = useMemo(() => {
+  const [initial] = useState(() => {
     const persisted = loadState()
     if (persisted) {
       return {
         ...persisted,
         sessions: persisted.sessions.map((session) => ({
           ...session,
+          startedAt: Object.prototype.hasOwnProperty.call(session, 'startedAt')
+            ? session.startedAt
+            : new Date(session.createdAt).getTime(),
+          endedAt: session.endedAt ?? null,
+          // Existing sessions used nonPlayingIds for the old Available Members
+          // section. Keep those as club members; only already-active players
+          // become participants during the migration.
+          participantIds: session.participantIds ?? session.playingIds ?? [],
+          visitors: session.visitors ?? [],
           history: session.history ?? [],
           stats: Object.fromEntries(
             Object.entries(session.stats).map(([memberId, stats]) => [
@@ -43,7 +55,7 @@ export function useRacketArenaState() {
       sessions: [createSession('Mpact Sundays', seedMembers)],
       activeSessionId: null as string | null,
     }
-  }, [])
+  })
 
   const [members, setMembers] = useState(initial.members)
   const [sessions, setSessions] = useState<Session[]>(initial.sessions)
@@ -59,6 +71,7 @@ export function useRacketArenaState() {
     'queue' | 'totalGames' | 'wins' | 'skill' | 'name'
   >('queue')
   const [manualPickIds, setManualPickIds] = useState<string[]>([])
+  const [clock, setClock] = useState(() => Date.now())
 
   const resolvedActiveSessionId =
     activeSessionId && sessions.some((session) => session.id === activeSessionId)
@@ -73,14 +86,22 @@ export function useRacketArenaState() {
     })
   }, [members, sessions, resolvedActiveSessionId])
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === resolvedActiveSessionId) ?? null,
     [sessions, resolvedActiveSessionId],
   )
 
   const memberById = useMemo(
-    () => members.reduce<Record<string, Member>>((acc, m) => ((acc[m.id] = m), acc), {}),
-    [members],
+    () =>
+      [...members, ...sessions.flatMap((session) => session.visitors ?? [])].reduce<
+        Record<string, Member>
+      >((acc, member) => ((acc[member.id] = member), acc), {}),
+    [members, sessions],
   )
 
   const queuesForClub = [...sessions].sort((a, b) => {
@@ -120,6 +141,9 @@ export function useRacketArenaState() {
             missedGames: 0,
             joinedAt: Object.keys(session.stats).length + 1,
             waitingSince: Date.now(),
+            totalWaitMs:0,
+            waitPeriods:0,
+            averageWaitMs: 0,
           },
         },
       })),
@@ -157,7 +181,7 @@ export function useRacketArenaState() {
 
   const addMember = (name: string, skill: Skill) => {
     if (!name.trim() || !skillOrder.includes(skill)) return
-    const newMember = { id: crypto.randomUUID(), name: name.trim(), skill }
+    const newMember = { id: crypto.randomUUID(), name: capitalizeName(name.trim()), skill }
     setMembers((prev) => [...prev, newMember])
     upsertStatsForNewMember(newMember.id)
   }
@@ -174,7 +198,7 @@ export function useRacketArenaState() {
         const skillNumber = match?.[2] ? Number(match[2]) : null
 
         return {
-          name,
+          name: capitalizeName(name),
           skill: skillNumber ? skillOrder[skillNumber - 1] : defaultSkill,
         }
       })
@@ -214,6 +238,7 @@ export function useRacketArenaState() {
       prev.map((session) => ({
         ...session,
         nonPlayingIds: session.nonPlayingIds.filter((id) => id !== memberId),
+        participantIds: (session.participantIds ?? []).filter((id) => id !== memberId),
         playingIds: session.playingIds.filter((id) => id !== memberId),
         rosters: session.rosters
           .map((r) => ({ ...r, playerIds: r.playerIds.filter((id) => id !== memberId) }))
@@ -233,6 +258,95 @@ export function useRacketArenaState() {
       prev.map((session) => (session.id === activeSessionId ? updater(session) : session)),
     )
   }
+
+  const addVisitors = (names: string[], defaultSkill: Skill = 'Intermediate') => {
+    if (!activeSessionId || !skillOrder.includes(defaultSkill)) return
+
+    const cleanedVisitors = names
+      .map((line) => {
+        const trimmedLine = line.trim()
+        const match = trimmedLine.match(/^(.*?)(?:\s+([1-7]))?$/)
+        const name = (match?.[1] ?? trimmedLine).trim()
+        const skillNumber = match?.[2] ? Number(match[2]) : null
+        return {
+          name: capitalizeName(name),
+          skill: skillNumber ? skillOrder[skillNumber - 1] : defaultSkill,
+        }
+      })
+      .filter((visitor) => visitor.name)
+
+    updateActiveSession((session) => {
+      const existingNames = new Set((session.visitors ?? []).map((visitor) => visitor.name.toLowerCase()))
+      const uniqueVisitors = cleanedVisitors.filter(
+        (visitor, index) =>
+          !existingNames.has(visitor.name.toLowerCase()) &&
+          cleanedVisitors.findIndex((item) => item.name.toLowerCase() === visitor.name.toLowerCase()) === index,
+      )
+      if (!uniqueVisitors.length) return session
+
+      const newVisitors = uniqueVisitors.map((visitor) => ({
+        ...visitor,
+        id: crypto.randomUUID(),
+      }))
+      const now = Date.now()
+      const stats = { ...session.stats }
+      const nextJoinedAt = Object.keys(stats).length
+      newVisitors.forEach((visitor, index) => {
+        stats[visitor.id] = {
+          gamesPlayed: 0,
+          wins: 0,
+          missedGames: 0,
+          joinedAt: nextJoinedAt + index + 1,
+          waitingSince: now,
+          totalWaitMs: 0,
+          waitPeriods: 0,
+          averageWaitMs: 0,
+        }
+      })
+
+      return {
+        ...session,
+        visitors: [...(session.visitors ?? []), ...newVisitors],
+        participantIds: [...session.participantIds, ...newVisitors.map((visitor) => visitor.id)],
+        stats,
+      }
+    })
+  }
+
+  const editVisitor = (visitorId: string, name: string, skill: Skill) => {
+    if (!name.trim() || !skillOrder.includes(skill)) return
+    updateActiveSession((session) => ({
+      ...session,
+      visitors: (session.visitors ?? []).map((visitor) =>
+        visitor.id === visitorId ? { ...visitor, name: name.trim(), skill } : visitor,
+      ),
+    }))
+  }
+
+  const deleteVisitor = (visitorId: string) => {
+    updateActiveSession((session) => {
+      const updatedRosters = session.rosters
+        .map((roster) => ({
+          ...roster,
+          playerIds: roster.playerIds.filter((id) => id !== visitorId),
+        }))
+        .filter((roster) => roster.playerIds.length > 0)
+      return {
+        ...session,
+        visitors: (session.visitors ?? []).filter((visitor) => visitor.id !== visitorId),
+        participantIds: session.participantIds.filter((id) => id !== visitorId),
+        playingIds: session.playingIds.filter((id) => id !== visitorId),
+        priorityList: session.priorityList.filter((id) => id !== visitorId),
+        playerList: session.playerList.filter((id) => id !== visitorId),
+        rosters: updatedRosters,
+        courts: session.courts.map((court) => ({
+          ...court,
+          teamA: court.teamA.filter((id) => id !== visitorId),
+          teamB: court.teamB.filter((id) => id !== visitorId),
+        })),
+      }
+    })
+  }
   const getTotalGames = (stats: MemberStats) => {
     return stats.gamesPlayed + stats.missedGames
   }
@@ -240,6 +354,7 @@ export function useRacketArenaState() {
   const moveToPlaying = (memberId: string) => {
     setSessions((prev) =>
       prev.map((session) => {
+        if (session.id !== activeSessionId) return session
         if (session.playingIds.includes(memberId)) {
           return session
         }
@@ -250,19 +365,12 @@ export function useRacketArenaState() {
           (id) => !session.priorityList.includes(id),
         )
 
-        const inGamePlayers = new Set(
-          session.courts.flatMap((court) => [
-            ...court.teamA,
-            ...court.teamB,
-          ]),
-        )
-
         let lowestTotalGames = 0
 
         if (activeNonPriorityPlayers.length > 0) {
           lowestTotalGames = Math.min(
             ...activeNonPriorityPlayers.map((id) =>
-              getTotalGames(session.stats[id]) + (inGamePlayers.has(id) ? 1 : 0),
+              getTotalGames(session.stats[id]),
             ),
           )
         }
@@ -277,8 +385,10 @@ export function useRacketArenaState() {
         const updatedStats = {
           ...memberStats,
           missedGames,
-          waitingSince: Date.now(),
-          joinedAtTime: memberStats.joinedAtTime ?? Date.now(),
+          waitingSince: session.startedAt ? Date.now() : memberStats.waitingSince,
+          joinedAtTime: session.startedAt
+            ? memberStats.joinedAtTime ?? Date.now()
+            : memberStats.joinedAtTime,
         }
 
         const shouldPrioritize = missedGames > 0
@@ -288,9 +398,9 @@ export function useRacketArenaState() {
 
           playingIds: [...session.playingIds, memberId],
 
-          nonPlayingIds: session.nonPlayingIds.filter(
-            (id) => id !== memberId,
-          ),
+          participantIds: session.participantIds.includes(memberId)
+            ? session.participantIds
+            : [...session.participantIds, memberId],
 
           priorityList: shouldPrioritize
             ? [...session.priorityList, memberId]
@@ -308,10 +418,11 @@ export function useRacketArenaState() {
       }),
     )
   }
-
+  
   const resignFromPlaying = (memberId: string) => {
     setSessions((prev) =>
       prev.map((session) => {
+        if (session.id !== activeSessionId) return session
         const updatedRosters = session.rosters
           .map((roster) => ({
             ...roster,
@@ -349,13 +460,44 @@ export function useRacketArenaState() {
             (id) => id !== memberId,
           ),
 
-          nonPlayingIds: [
-            ...session.nonPlayingIds,
-            memberId,
-          ].sort(),
-
           rosters: updatedRosters,
           
+          stats: {
+            ...session.stats,
+            [memberId]: {
+              ...session.stats[memberId],
+              waitingSince: Date.now(),
+            },
+          },
+        }
+      }),
+    )
+  }
+
+  const setParticipant = (memberId: string, isParticipant: boolean) => {
+    setSessions((prev) =>
+      prev.map((session) => {
+        if (session.id !== activeSessionId) return session
+        const participantIds = session.participantIds ?? []
+        if (isParticipant) {
+          if (participantIds.includes(memberId)) return session
+          return { ...session, participantIds: [...participantIds, memberId] }
+        }
+
+        if (!participantIds.includes(memberId)) return session
+        const updatedRosters = session.rosters
+          .map((roster) => ({
+            ...roster,
+            playerIds: roster.playerIds.filter((id) => id !== memberId),
+          }))
+          .filter((roster) => roster.playerIds.length > 0)
+        return {
+          ...session,
+          participantIds: participantIds.filter((id) => id !== memberId),
+          playingIds: session.playingIds.filter((id) => id !== memberId),
+          priorityList: session.priorityList.filter((id) => id !== memberId),
+          playerList: session.playerList.filter((id) => id !== memberId),
+          rosters: updatedRosters,
           stats: {
             ...session.stats,
             [memberId]: {
@@ -372,104 +514,413 @@ export function useRacketArenaState() {
     return skillOrder.indexOf(memberById[memberId].skill) + 1
   }
       
-const isCompatiblePlayer = (
-  session: Session,
-  basePlayerId: string,
-  comparedPlayerId: string,
-  widenLevel: number,
-) => {
-  const baseStats =
-    session.stats[basePlayerId]
+  const isCompatiblePlayer = (
+    session: Session,
+    basePlayerId: string,
+    comparedPlayerId: string,
+    widenLevel: number,
+  ) => {
+    const baseStats = session.stats[basePlayerId]
 
-  const comparedStats =
-    session.stats[comparedPlayerId]
+    const comparedStats = session.stats[comparedPlayerId]
 
-  const baseTotalGames =
-    getTotalGames(baseStats)
+    const baseTotalGames = getTotalGames(baseStats)
 
-  const comparedTotalGames =
-    getTotalGames(comparedStats)
+    const comparedTotalGames = getTotalGames(comparedStats)
 
-  const totalGamesDiff = Math.abs(
-    baseTotalGames -
-      comparedTotalGames,
-  )
+    const totalGamesDiff = Math.abs(
+      baseTotalGames -
+        comparedTotalGames,
+    )
 
-  const maxGamesDiff =
-    widenLevel >= 2 ? 2 : 1
+    const maxGamesDiff = widenLevel >= 4 ? 2 : 1
 
-  if (totalGamesDiff > maxGamesDiff) {
-    return false
+    if (totalGamesDiff > maxGamesDiff) {
+      // console.log(
+      //   memberById[basePlayerId].name,
+      //   "vs",
+      //   memberById[comparedPlayerId].name,
+      //   "Rejected: totalGamesDiff"
+      // )
+      return false
+    }
+
+    const baseSkill = getSkillLevel(basePlayerId)
+
+    const comparedSkill = getSkillLevel(comparedPlayerId)
+
+    const activeSkills =
+      session.playingIds.map(
+        (playerId) =>
+          getSkillLevel(playerId),
+      )
+
+    const sessionMinSkill =
+      Math.min(...activeSkills)
+
+    const sessionMaxSkill =
+      Math.max(...activeSkills)
+
+    if (getTotalGames(baseStats)=== 0) {
+      const allowedSkillDiff =
+          widenLevel >= 4
+              ? sessionMaxSkill - sessionMinSkill
+              : widenLevel + 1
+
+      return (
+          Math.abs(baseSkill - comparedSkill) <= allowedSkillDiff
+      )
+    }
+
+    let minSkill =
+      baseSkill - 1
+
+    let maxSkill =
+      baseSkill + 1
+
+    const isLowestSkillInSession =
+      baseSkill === sessionMinSkill
+
+    const isHighestSkillInSession =
+      baseSkill === sessionMaxSkill
+      
+    if (isLowestSkillInSession) {
+      minSkill = baseSkill
+      maxSkill = baseSkill + 2
+    }
+
+    if (isHighestSkillInSession) {
+      minSkill = baseSkill - 2
+      maxSkill = baseSkill
+    }
+
+    if (widenLevel >= 1) {
+      minSkill -= 1
+      maxSkill += 1
+    }
+    if (widenLevel >= 4) {
+      minSkill = sessionMinSkill
+      maxSkill = sessionMaxSkill
+    }
+  
+    minSkill =
+      Math.max(
+        sessionMinSkill,
+        minSkill,
+      )
+
+    maxSkill =
+      Math.min(
+        sessionMaxSkill,
+        maxSkill,
+      )
+
+
+    const withinSkillRange =
+      comparedSkill >= minSkill &&
+      comparedSkill <= maxSkill
+
+    if (!withinSkillRange) {
+      return false
+    }
+
+    const isEven =
+      baseTotalGames % 2 === 0
+
+    if (widenLevel < 3) {
+      if (isEven && comparedSkill < baseSkill) {
+        return false
+      }
+
+      if (!isEven && comparedSkill > baseSkill) {
+        return false
+      }
+    }
+
+    return true
+  }
+  const getTeammateCount = (
+    session: Session,
+    playerA: string,
+    playerB: string,
+  ) => {
+    let count = 0
+
+    for (const match of session.history) {
+      const teamA =
+        match.teamA.includes(playerA) &&
+        match.teamA.includes(playerB)
+
+      const teamB =
+        match.teamB.includes(playerA) &&
+        match.teamB.includes(playerB)
+
+      if (teamA || teamB) {
+        count++
+      }
+    }
+
+    return count
   }
 
-  const baseSkill =
-    getSkillLevel(basePlayerId)
+  const getOpponentCount = (
+    session: Session,
+    playerA: string,
+    playerB: string,
+  ) => {
+    let count = 0
 
-  const comparedSkill =
-    getSkillLevel(comparedPlayerId)
+    for (const match of session.history) {
+      const teamA =
+        match.teamA.includes(playerA)
 
-  if (getTotalGames(baseStats)=== 0) {
-    return (
+      const teamB =
+        match.teamB.includes(playerA)
+
+      const playerBOnTeamA =
+        match.teamA.includes(playerB)
+
+      const playerBOnTeamB =
+        match.teamB.includes(playerB)
+
+      const wereOpponents =
+        (teamA && playerBOnTeamB) ||
+        (teamB && playerBOnTeamA)
+
+      if (wereOpponents) {
+        count++
+      }
+    }
+
+    return count
+  }
+
+  const getDiversityScore = (
+    session: Session,
+    teamA: string[],
+    teamB: string[],
+  ) => {
+    let score = 0
+
+    score +=
+      getTeammateCount(
+        session,
+        teamA[0],
+        teamA[1],
+      ) * 10
+
+    score +=
+      getTeammateCount(
+        session,
+        teamB[0],
+        teamB[1],
+      ) * 10
+
+    for (const a of teamA) {
+      for (const b of teamB) {
+        score +=
+          getOpponentCount(
+            session,
+            a,
+            b,
+          ) * 2
+      }
+    }
+
+    return score
+  }
+  const getCombinationsOfThree = (
+    players: string[],
+  ) => {
+    const combinations: string[][] = []
+
+    for (let i = 0; i < players.length - 2; i++) {
+      for (let j = i + 1; j < players.length - 1; j++ ) {
+        for (let k = j + 1; k < players.length; k++) {
+          combinations.push([
+            players[i],
+            players[j],
+            players[k],
+          ])
+        }
+      }
+    }
+
+    return combinations
+  }
+  const getTeamArrangements = (
+    players: string[],
+  ) => {
+    const [a, b, c, d] = players
+
+    return [
+      {
+        teamA: [a, b],
+        teamB: [c, d],
+      },
+      {
+        teamA: [a, c],
+        teamB: [b, d],
+      },
+      {
+        teamA: [a, d],
+        teamB: [b, c],
+      },
+    ]
+  }
+  const getInGamePenalty = (
+    players: string[],
+    inGamePlayers: Set<string>,
+  ) => {
+    const inGameCount =
+      players.filter((playerId) =>
+        inGamePlayers.has(playerId),
+      ).length
+
+    return inGameCount * 100
+  }
+  // const getGameGapPenalty = (
+  //   session: Session,
+  //   players: string[],
+  //   inGamePlayers: Set<string>,
+  // ) => {
+  //   const availablePlayers =
+  //     session.playingIds.filter(
+  //       (playerId) =>
+  //         !inGamePlayers.has(playerId),
+  //     )
+
+  //   if (availablePlayers.length === 0) {
+  //     return 0
+  //   }
+
+  //   const lowestTotalGames = Math.min(
+  //     ...availablePlayers.map(
+  //       (playerId) =>
+  //         getTotalGames(
+  //           session.stats[playerId],
+  //         ),
+  //     ),
+  //   )
+
+  //   return players.reduce(
+  //     (penalty, playerId) => {
+  //       const playerTotalGames =
+  //         getTotalGames(
+  //           session.stats[playerId],
+  //         )
+
+  //       const gamesAboveMinimum =
+  //         Math.max(
+  //           0,
+  //           playerTotalGames - lowestTotalGames,
+  //         )
+
+  //       return (
+  //         penalty +
+  //         gamesAboveMinimum * 60
+  //       )
+  //     },
+  //     0,
+  //   )
+  // }
+  const getSkillOutlierPenalty = (
+    players: string[],
+  ) => {
+    const skills =
+      players.map((playerId) =>
+        getSkillLevel(playerId),
+      )
+
+    const lowestSkill =
+      Math.min(...skills)
+
+    const highestSkill =
+      Math.max(...skills)
+
+    const skillSpread =
+      highestSkill - lowestSkill
+
+    if (skillSpread <= 1) {
+      return 0
+    }
+
+    return (skillSpread - 1) * 25 
+  }
+  const getTeamBalancePenalty = (
+    teamA: string[],
+    teamB: string[],
+  ) => {
+    const teamASkill =
+      teamA.reduce(
+        (total, playerId) =>
+          total + getSkillLevel(playerId),
+        0,
+      )
+
+    const teamBSkill =
+      teamB.reduce(
+        (total, playerId) =>
+          total + getSkillLevel(playerId),
+        0, 
+      )
+
+    const skillGap =
       Math.abs(
-        baseSkill - comparedSkill,
-      ) <= 1
+        teamASkill - teamBSkill,
+      )
+
+    return skillGap * 15
+  }
+  const getRosterGameGap = (
+    session: Session,
+    players: string[],
+  ) => {
+    const inGamePlayers = new Set(
+      session.courts.flatMap(court => [
+        ...court.teamA,
+        ...court.teamB,
+      ]),
+    )
+
+    const totals = players.map(playerId => {
+      return (
+        getTotalGames(session.stats[playerId]) +
+        (inGamePlayers.has(playerId) ? 1 : 0)
+      )
+    })
+
+    return (
+      Math.max(...totals) -
+      Math.min(...totals)
     )
   }
+  const getFairnessScore = (
+    session: Session,
+    memberId: string,
+  ) => {
+    if (!session.startedAt) return 0
 
-  let minSkill = baseSkill
-  let maxSkill = baseSkill
+    const stats = session.stats[memberId]
 
-  switch (baseSkill) {
-    case 1:
-      maxSkill = 3
-      break
+    const currentWait =
+      Math.max(0, (session.endedAt ?? clock) - stats.waitingSince)
 
-    case 7:
-      minSkill = 5
-      break
+    const averageWait =
+      stats.averageWaitMs ?? 0
 
-    default:
-      minSkill = baseSkill - 1
-      maxSkill = baseSkill + 1
+    return (
+      currentWait * 0.7 +
+      averageWait * 0.3
+    )
   }
-
-  if (widenLevel >= 1) {
-    minSkill -= 1
-    maxSkill += 1
-  }
-
-  minSkill = Math.max(1, minSkill)
-  maxSkill = Math.min(7, maxSkill)
-
-  const withinSkillRange =
-    comparedSkill >= minSkill &&
-    comparedSkill <= maxSkill
-
-  if (!withinSkillRange) {
-    return false
-  }
-
-  const isEven =
-    baseTotalGames % 2 === 0
-
-  if (widenLevel < 3) {
-    if (isEven && comparedSkill < baseSkill) {
-      return false
-    }
-
-    if (!isEven && comparedSkill > baseSkill) {
-      return false
-    }
-  }
-
-  return true
-}
 
 const buildMatchSet = (
   session: Session,
   queueList: string[],
   preferredBasePlayerId?: string,
 ) => {
+  
   if (queueList.length < 4) {
     return []
   }
@@ -479,7 +930,7 @@ const buildMatchSet = (
       (roster) => roster.playerIds,
     ),
   )
-
+  
   const baseIndexes = queueList
     .map((_, index) => index)
     .sort((a, b) => {
@@ -497,54 +948,98 @@ const buildMatchSet = (
 
       return a - b
     })
+  const inGamePlayers = new Set(
+    session.courts.flatMap((court) => [
+      ...court.teamA,
+      ...court.teamB,
+    ]),
+  )
+  const getEffectiveGames = (
+    session: Session,
+    memberId: string,
+  ) => {
+    const stats = session.stats[memberId]
+
+    return (
+      getTotalGames(stats) +
+      (inGamePlayers.has(memberId) ? 1 : 0)
+    )
+  }
+  const activeCourts = session.courts
+    .filter(
+      (court) =>
+        court.teamA.length > 0 &&
+        court.startedAt !== null,
+    )
+    .sort(
+      (a, b) =>
+        (a.startedAt ?? 0) -
+        (b.startedAt ?? 0),
+    )
+
+  const eligibleCourtCount = Math.max(
+    1,
+    Math.round(activeCourts.length / 3),
+  )
+
+  const blockedInGamePlayers = new Set(
+    activeCourts
+      .slice(eligibleCourtCount)
+      .flatMap((court) => [
+        ...court.teamA,
+        ...court.teamB,
+      ]),
+  )
+    // console.log(
+    //   "Queue List:",
+    //   queueList.map(id => ({
+    //     name: memberById[id]?.name,
+    //     blocked: blockedInGamePlayers.has(id),
+    //     inGame: inGamePlayers.has(id),
+    //   }))
+    // )
 
   for (const baseIndex of baseIndexes) {
     const basePlayer = queueList[baseIndex]
 
+    if (blockedInGamePlayers.has(basePlayer)) {
+      continue
+    }
     if (queuedPlayers.has(basePlayer)) {
       continue
     }
 
-    const baseTotalGames =
-      getTotalGames(
-        session.stats[basePlayer],
-      )
+    const baseTotalGames = getEffectiveGames(session,basePlayer,)
 
-      const startIndex =
-        baseTotalGames % 2 === 0
-          ? baseIndex + 1
-          : baseIndex + 2
-      const comparedStartIndex =
-        basePlayer === preferredBasePlayerId ? 0 : startIndex
+    const startIndex = baseTotalGames  === 2 ? baseIndex + 2 : baseIndex + 1
+    
+    const comparedStartIndex =
+      basePlayer === preferredBasePlayerId ? 0 : startIndex
+    
+    let bestRoster: string[] = []
+    let lowestScore = Infinity
+    let bestGameGap = Infinity  
+    for ( let widenLevel = 0; widenLevel <= 4; widenLevel++) {
+    // const waitSetArr = [basePlayer]
+      const compatiblePlayers: string[] = []
 
-      for (
-        let widenLevel = 0;
-      widenLevel <= 4;
-      widenLevel++
-    ) {
-      const waitSetArr = [basePlayer]
-
-      for (
-        let i = comparedStartIndex;
-        i < queueList.length;
-        i++
-      ) {
-        const comparedPlayer =
-          queueList[i]
+      for ( let i = comparedStartIndex ; i < queueList.length ; i++) {
+        const comparedPlayer = queueList[i]
 
         if (
-          comparedPlayer ===
-            basePlayer ||
-          waitSetArr.includes(
-            comparedPlayer,
-          ) ||
-          queuedPlayers.has(
-            comparedPlayer,
-          )
+          comparedPlayer === basePlayer ||
+          compatiblePlayers.includes(comparedPlayer) ||
+          queuedPlayers.has(comparedPlayer) ||
+          blockedInGamePlayers.has(comparedPlayer)
         ) {
           continue
         }
-
+        //           console.log({
+        //   basePlayer: memberById[basePlayer]?.name,
+        //   comparedPlayer: memberById[comparedPlayer]?.name,
+        //   blocked: blockedInGamePlayers.has(comparedPlayer),
+        //   inGame: inGamePlayers.has(comparedPlayer),
+        // })
         const compatible =
           isCompatiblePlayer(
             session,
@@ -554,18 +1049,130 @@ const buildMatchSet = (
           )
 
         if (compatible) {
-          waitSetArr.push(
-            comparedPlayer,
-          )
+          compatiblePlayers.push(comparedPlayer)
         }
+      }
+      // console.log({
+      //   basePlayer: memberById[basePlayer]?.name,
+      //   widenLevel,
+      //   compatiblePlayers: compatiblePlayers.map(
+      //     id => memberById[id]?.name
+      //   ),
+      // })
+      if (compatiblePlayers.length >= 3) {
+        const combinations =
+          getCombinationsOfThree(
+            compatiblePlayers,
+          )
 
-        if (
-          waitSetArr.length === 4
-        ) {
-          return waitSetArr
+
+        for (const combination of combinations) {
+          const fourPlayers = [
+            basePlayer,
+            ...combination,
+          ]
+
+          const arrangements =
+            getTeamArrangements(
+              fourPlayers,
+            )
+
+          for (const arrangement of arrangements) {
+            const rosterPlayers = [
+              ...arrangement.teamA,
+              ...arrangement.teamB,
+            ]
+            const rosterGameGap =
+              getRosterGameGap(
+                session,
+                rosterPlayers,
+              )
+
+            const diversityScore =
+              getDiversityScore(
+                session,
+                arrangement.teamA,
+                arrangement.teamB,
+              )
+
+            const inGamePenalty =
+              getInGamePenalty(
+                rosterPlayers,
+                inGamePlayers,
+              )
+
+            const skillOutlierPenalty =
+              getSkillOutlierPenalty(
+                rosterPlayers,
+              )
+            const teamBalancePenalty =
+              getTeamBalancePenalty(
+                arrangement.teamA,
+                arrangement.teamB,
+              )
+            const waitingReward =
+              Math.round(rosterPlayers.reduce(
+                (sum, playerId) =>
+                  sum + getFairnessScore(session, playerId),
+                0,
+              ) / 60000)
+
+            const totalScore =
+              diversityScore +
+              inGamePenalty + 
+              skillOutlierPenalty +
+              teamBalancePenalty -
+              waitingReward
+              // console.log({
+              //   roster: rosterPlayers.map(id => memberById[id].name),
+              //   gameGap: rosterGameGap,
+              //   totalScore,
+              //   diversityScore,
+              //   inGamePenalty,
+              //   skillOutlierPenalty,
+              //   teamBalancePenalty,
+              // })
+            if (rosterGameGap < bestGameGap) {
+                bestGameGap = rosterGameGap
+
+              lowestScore = totalScore
+
+              bestRoster = rosterPlayers
+
+              continue
+            }
+            if ( rosterGameGap === bestGameGap && 
+              totalScore < lowestScore ) {
+              lowestScore = totalScore
+
+              bestRoster = rosterPlayers
+            }
+          }
+        }
+        // console.log({
+        //   basePlayer: memberById[basePlayer].name,
+        //   compatiblePlayers: compatiblePlayers.map(id => memberById[id].name),
+        //   bestRoster: bestRoster.map(id => memberById[id].name),
+        // });
+        if (bestRoster.length === 4) {
+        //   console.log({
+        //   basePlayer: memberById[basePlayer]?.name,
+        //   compatiblePlayers: compatiblePlayers.map(
+        //     id => memberById[id]?.name
+        //   ),
+        //   bestRoster: bestRoster.map(
+        //     id => memberById[id]?.name
+        //   ),
+        //   lowestScore,
+        // })
+          return bestRoster
         }
       }
     }
+//     console.log(
+//   "Failed to build roster for",
+//   memberById[basePlayer].name
+// );
   }
 
   return []
@@ -623,10 +1230,154 @@ const buildMatchSet = (
     ]
   }
 
-  
+  const buildSelectedPairMatch = (
+    session: Session,
+    queueList: string[],
+    selectedIds: string[],
+  ) => {
+    if (selectedIds.length !== 2) {
+      return []
+    }
 
+    const queuedPlayers = new Set(
+      session.rosters.flatMap(
+        (roster) => roster.playerIds,
+      ),
+    )
+
+    const [playerA, playerB] = selectedIds
+
+    const teamASkill =
+      getSkillLevel(playerA) +
+      getSkillLevel(playerB)
+
+    const lowestSkill = Math.min(
+      getSkillLevel(playerA),
+      getSkillLevel(playerB),
+    )
+    let bestRoster: string[] = []
+    let bestGameGap = Infinity
+    let lowestScore = Infinity
+
+    const inGamePlayers = new Set(
+      session.courts.flatMap((court) => [
+        ...court.teamA,
+        ...court.teamB,
+      ]),
+    )
+
+    for (const playerC of queueList) {
+      if (
+        selectedIds.includes(playerC) ||
+        queuedPlayers.has(playerC)
+      ) {
+        continue
+      }
+
+      const playerCSkill =
+        getSkillLevel(playerC)
+
+      if (
+        playerCSkill !== lowestSkill &&
+        playerCSkill !== lowestSkill + 1
+      ) {
+        continue
+      }
+
+      for (const playerD of queueList) {
+        if (
+          selectedIds.includes(playerD) ||
+          playerD === playerC ||
+          queuedPlayers.has(playerD)
+        ) {
+          continue
+        }
+
+        const teamBSkill =
+          playerCSkill +
+          getSkillLevel(playerD)
+
+        const skillDifference = Math.abs(
+          teamASkill - teamBSkill,
+        )
+
+        if (skillDifference > 2) {
+          continue
+        }
+
+        const rosterPlayers = [
+          playerA,
+          playerB,
+          playerC,
+          playerD,
+        ]
+
+        const rosterGameGap =
+          getRosterGameGap(
+            session,
+            rosterPlayers,
+          )
+
+        const diversityScore =
+          getDiversityScore(
+            session,
+            [playerA, playerB],
+            [playerC, playerD],
+          )
+
+        const inGamePenalty =
+          getInGamePenalty(
+            rosterPlayers,
+            inGamePlayers,
+          )
+
+        const skillOutlierPenalty =
+          getSkillOutlierPenalty(
+            rosterPlayers,
+          )
+
+        const teamBalancePenalty =
+          getTeamBalancePenalty(
+            [playerA, playerB],
+            [playerC, playerD],
+          )
+
+        const waitingReward =
+          Math.round(
+            rosterPlayers.reduce(
+              (sum, playerId) =>
+                sum +
+                getFairnessScore(session, playerId),
+              0,
+            ) / 60000,
+          )
+
+        const totalScore =
+          diversityScore +
+          inGamePenalty +
+          skillOutlierPenalty +
+          teamBalancePenalty -
+          waitingReward
+
+        if (rosterGameGap < bestGameGap) {
+          bestGameGap = rosterGameGap
+          lowestScore = totalScore
+          bestRoster = rosterPlayers
+        } else if (
+          rosterGameGap === bestGameGap &&
+          totalScore < lowestScore
+        ) {
+          lowestScore = totalScore
+          bestRoster = rosterPlayers
+        }
+      }
+    }
+
+    return bestRoster
+  }
   const generateRoster = () => {
     updateActiveSession((session) => {
+      if (session.endedAt) return session
       const queueList = buildQueueList(session)
       const queuedPlayers = new Set(
         session.rosters.flatMap((roster) => roster.playerIds),
@@ -642,7 +1393,7 @@ const buildMatchSet = (
           (roster) => roster.playerIds.length < 4,
         )
 
-      let selectedPlayers: string[] = []
+      let selectedPlayers: string[]
 
       if (incompleteRosterIndex !== -1) {
         const incompleteRoster =
@@ -686,7 +1437,36 @@ const buildMatchSet = (
           rosters: updatedRosters,
         }
       }
+      if (manualPickIds.length === 2) {
+        const selectedMatch =
+          buildSelectedPairMatch(
+            session,
+            queueList,
+            manualPickIds,
+          )
 
+        if (selectedMatch.length < 4) {
+          toast.warning(
+            'Unable to find compatible opponents.',
+          )
+
+          return session
+        }
+
+        return {
+          ...session,
+          rosters: [
+            ...session.rosters,
+            {
+              id: crypto.randomUUID(),
+              playerIds: selectedMatch,
+              baseOrder: selectedMatch,
+              rotationIndex: 0,
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        }
+      }
       const waitSetArr = buildMatchSet(
         session,
         queueList,
@@ -772,36 +1552,38 @@ const buildMatchSet = (
 
   const queueManualRoster = () => {
     if (manualPickIds.length !== 4) return
-    updateActiveSession((session) => ({
-      ...session,
-      rosters: [
-        ...session.rosters,
-        {
-          id: crypto.randomUUID(),
-          playerIds: manualPickIds,
-          baseOrder: manualPickIds,
-          rotationIndex: 0,
-          createdAt: new Date().toISOString(),
-          
-        },
-      ],
-    }))
+    updateActiveSession((session) => {
+      if (session.endedAt) return session
+
+      return {
+        ...session,
+        rosters: [
+          ...session.rosters,
+          {
+            id: crypto.randomUUID(),
+            playerIds: manualPickIds,
+            baseOrder: manualPickIds,
+            rotationIndex: 0,
+            createdAt: new Date().toISOString(),
+            
+          },
+        ],
+      }
+    })
     setManualPickIds([])
-  }
+  } 
 
-  
-
-    const dissolveRoster = (
-      rosterId: string,
-    ) =>
-      updateActiveSession((session) => {
-        return {
-          ...session,
-          rosters: session.rosters.filter(
-            (r) => r.id !== rosterId,
-          ),
-        }
-      })
+  const dissolveRoster = (
+    rosterId: string,
+  ) =>
+    updateActiveSession((session) => {
+      return {
+        ...session,
+        rosters: session.rosters.filter(
+          (r) => r.id !== rosterId,
+        ),
+      }
+    })
 
 
   const replaceRosterPlayer = (rosterId: string, slotIndex: number, memberId: string) =>
@@ -872,6 +1654,11 @@ const buildMatchSet = (
 
   const assignToCourt = (rosterId: string, courtId?: string) =>
     updateActiveSession((session) => {
+      if (session.endedAt) return session
+      if (!session.startedAt) {
+        toast.warning('Please start the queue before sending players to a court.')
+        return session
+      }
       const roster = session.rosters.find((r) => r.id === rosterId)
       if (!roster) return session
       const court = courtId
@@ -927,7 +1714,7 @@ const buildMatchSet = (
           : court,
       ),
     }))
-const forfeitMatch = (courtId: string) =>
+  const forfeitMatch = (courtId: string) =>
     updateActiveSession((session) => {
       const target = session.courts.find((court) => court.id === courtId)
       if (!target || target.teamA.length === 0 || target.teamB.length === 0) return session
@@ -953,6 +1740,61 @@ const forfeitMatch = (courtId: string) =>
                 startedAt: null,
               }
             : court,
+        ),
+      }
+    })
+
+  const updateHistoryMatch = (
+    matchId: string,
+    changes: Pick<MatchHistory, 'teamA' | 'teamB' | 'scoreA' | 'scoreB'>,
+  ) =>
+    updateActiveSession((session) => {
+      const match = session.history.find((item) => item.id === matchId)
+      if (!match) return session
+
+      const scoreA = Number.isFinite(changes.scoreA)
+        ? Math.max(0, changes.scoreA)
+        : 0
+      const scoreB = Number.isFinite(changes.scoreB)
+        ? Math.max(0, changes.scoreB)
+        : 0
+      const result: MatchHistory['result'] =
+        scoreA === scoreB ? 'draw' : scoreA > scoreB ? 'teamA' : 'teamB'
+      const previousWinners =
+        match.result === 'teamA'
+          ? match.teamA
+          : match.result === 'teamB'
+            ? match.teamB
+            : []
+      const nextWinners =
+        result === 'teamA' ? changes.teamA : result === 'teamB' ? changes.teamB : []
+      const updatedStats = { ...session.stats }
+
+      for (const memberId of new Set([...previousWinners, ...nextWinners])) {
+        const stats = updatedStats[memberId]
+        if (!stats) continue
+        updatedStats[memberId] = {
+          ...stats,
+          wins:
+            stats.wins - (previousWinners.includes(memberId) ? 1 : 0) +
+            (nextWinners.includes(memberId) ? 1 : 0),
+        }
+      }
+
+      return {
+        ...session,
+        stats: updatedStats,
+        history: session.history.map((item) =>
+          item.id === matchId
+            ? {
+                ...item,
+                teamA: changes.teamA,
+                teamB: changes.teamB,
+                scoreA,
+                scoreB,
+                result,
+              }
+            : item,
         ),
       }
     })
@@ -987,12 +1829,48 @@ const forfeitMatch = (courtId: string) =>
           gameNumber: (updatedStats[memberId]?.gamesPlayed ?? 0) + 1,
         }
       })
+      // for (const memberId of matchPlayerIds) {
+      //   updatedStats[memberId] = {
+      //     ...updatedStats[memberId],
+      //     gamesPlayed: updatedStats[memberId].gamesPlayed + 1,
+      //     wins: updatedStats[memberId].wins + (winnerIds.includes(memberId) ? 1 : 0),
+      //     waitingSince: endedAt,
+      //   }
+      // }
       for (const memberId of matchPlayerIds) {
+        const waitingRecord =
+          waitingRecords.find(
+            (record) => record.memberId === memberId,
+          )
+
+        const waitingMs =
+          waitingRecord?.waitingMs ?? 0
+
+        const totalWaitMs =
+          (updatedStats[memberId].totalWaitMs ?? 0) +
+          waitingMs
+
+        const waitPeriods =
+          (updatedStats[memberId].waitPeriods ?? 0) +
+          1
+
         updatedStats[memberId] = {
           ...updatedStats[memberId],
-          gamesPlayed: updatedStats[memberId].gamesPlayed + 1,
-          wins: updatedStats[memberId].wins + (winnerIds.includes(memberId) ? 1 : 0),
+
+          gamesPlayed:
+            updatedStats[memberId].gamesPlayed + 1,
+
+          wins:
+            updatedStats[memberId].wins +
+            (winnerIds.includes(memberId) ? 1 : 0),
+
           waitingSince: endedAt,
+
+          totalWaitMs,
+          waitPeriods,
+
+          averageWaitMs:
+            totalWaitMs / waitPeriods,
         }
       }
 
@@ -1020,6 +1898,7 @@ const forfeitMatch = (courtId: string) =>
 
       // Update priorityList: remove players whose missedGames is now 0
       const updatedPriorityList = session.priorityList.filter((id) => {
+        
         if (!matchPlayerIds.includes(id)) {
           return true // Keep non-match players as they are
         }
@@ -1028,11 +1907,26 @@ const forfeitMatch = (courtId: string) =>
         )
         return newMissedGames > 0
       })
+      const removedFromPriority =
+        session.priorityList.filter(
+          (id) => !updatedPriorityList.includes(id),
+        ) 
+
+      const updatedPlayerList = [
+        ...session.playerList,
+        ...removedFromPriority.filter(
+          (id) => !session.playerList.includes(id),
+        ),
+        
+        
+      ]
 
       return {
+        
         ...session,
         stats: updatedStats,
         priorityList: updatedPriorityList,
+        playerList: updatedPlayerList,
         history: [
           {
             id: crypto.randomUUID(),
@@ -1042,7 +1936,7 @@ const forfeitMatch = (courtId: string) =>
             teamA: [...target.teamA],
             teamB: [...target.teamB],
             scoreA: safeScoreA,
-            scoreB: safeScoreB,
+            scoreB: safeScoreB ,
             result: matchResult,
             startedAt,
             endedAt,
@@ -1124,8 +2018,8 @@ const buildQueueList = (
     b: string,
   ) => {
     return (
-      session.stats[a].waitingSince -
-      session.stats[b].waitingSince
+      getFairnessScore(session, b) -
+      getFairnessScore(session, a)
     )
   }
 
@@ -1168,10 +2062,8 @@ const buildQueueList = (
 
 
         return (
-          session.stats[a]
-            .waitingSince -
-          session.stats[b]
-            .waitingSince
+          getFairnessScore(session, b) -
+          getFairnessScore(session, a)
         )
       })
 
@@ -1180,6 +2072,7 @@ const buildQueueList = (
     ...regularPlayers,
   ]
 }
+
 const buildSessionHistorySnapshot = (
   session: Session,
 ): SessionHistory => {
@@ -1233,7 +2126,9 @@ const buildSessionHistorySnapshot = (
       session.createdAt,
 
     endedAt:
-      lastMatch?.endedAt
+      session.endedAt
+        ? new Date(session.endedAt).toISOString()
+        : lastMatch?.endedAt
         ? new Date(lastMatch.endedAt).toISOString()
         : new Date().toISOString(),
 
@@ -1271,7 +2166,10 @@ const formatDuration = (durationMs?: number) => {
     .join(':')
 }
 
-const exportSessionCSV = (
+const csvFileName = (session: Session) =>
+  `${session.name.replace(/[\\/:*?"<>|]/g, '-')}.csv`
+
+const buildSessionCSV = (
   session: Session,
   memberById: Record<string, Member>,
 ) => {
@@ -1303,6 +2201,8 @@ const exportSessionCSV = (
     ['Session Information'],
     ['Session Name', session.name],
     ['Session Created At', session.createdAt],
+    ['Session Started At', formatCSVDate(session.startedAt)],
+    ['Session Ended At', formatCSVDate(session.endedAt)],
     ['Exported At', new Date().toISOString()],
     [],
     ['Players Information'],
@@ -1316,6 +2216,9 @@ const exportSessionCSV = (
       'Wins',
       'Losses',
       'Missed Games',
+      'Total Wait',
+      'Average Wait',
+      'Wait Periods',
     ],
   ]
 
@@ -1333,6 +2236,10 @@ const exportSessionCSV = (
         `${stats.wins}`,
         `${Math.max(0, stats.gamesPlayed - stats.wins)}`,
         `${stats.missedGames}`,
+
+        formatDuration(stats.totalWaitMs),
+        formatDuration(stats.averageWaitMs),
+        `${stats.waitPeriods}`,
       ])
     })
 
@@ -1411,6 +2318,73 @@ const exportSessionCSV = (
     })
   })
 
+  return rows
+    .map((row) => row.map(escapeCSVValue).join(','))
+    .join('\n')
+}
+
+const exportSessionCSV = (
+  session: Session,
+  memberById: Record<string, Member>,
+) => {
+  const csv = buildSessionCSV(session, memberById)
+
+  const blob = new Blob([csv], {
+    type: 'text/csv;charset=utf-8;',
+  })
+
+  const url =
+    URL.createObjectURL(blob)
+
+  const link =
+    document.createElement('a')
+
+  link.href = url
+
+  link.setAttribute(
+    'download',
+    csvFileName(session),
+  )
+
+  document.body.appendChild(link)
+
+  link.click()
+
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+const shareSessionCSV = async (
+  session: Session,
+  memberById: Record<string, Member>,
+) => {
+  const csv = buildSessionCSV(session, memberById)
+  const file = new File([csv], csvFileName(session), {
+    type: 'text/csv',
+  })
+
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({
+        title: `${session.name} CSV`,
+        text: 'Queue session CSV export',
+        files: [file],
+      })
+      return
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return
+      }
+      toast.error('Unable to open sharing. Downloading CSV instead.')
+    }
+  } else {
+    toast.info('Sharing is not available here. Downloading CSV instead.')
+  }
+
+  exportSessionCSV(session, memberById)
+}
+
+/*
   const csv =
     rows
       .map((row) => row.map(escapeCSVValue).join(','))
@@ -1439,17 +2413,56 @@ const exportSessionCSV = (
 
   document.body.removeChild(link)
 }
+*/
 
-const endSession = () =>
+const endSession = (endedAt = Date.now()) =>
   updateActiveSession((session) => {
-    const snapshot = buildSessionHistorySnapshot(session)
+    if (session.endedAt) return session
+    const hasActiveCourt = session.courts.some(
+      (court) => court.teamA.length > 0 || court.teamB.length > 0,
+    )
+
+    if (hasActiveCourt || session.rosters.length > 0) {
+      toast.error(
+        'Failed to End Queue Session, make sure Courts are empty and there is no pending Queue.',
+      )
+      return session
+    }
+
+    const snapshot = buildSessionHistorySnapshot({
+      ...session,
+      endedAt,
+    })
 
     return {
       ...session,
+      endedAt,
       sessionHistory: [
         snapshot,
         ...(session.sessionHistory ?? []),
       ],
+    }
+  })
+
+const startSession = () =>
+  updateActiveSession((session) => {
+    if (session.startedAt || session.endedAt) return session
+
+    const startedAt = Date.now()
+    const updatedStats = { ...session.stats }
+
+    for (const memberId of session.playingIds) {
+      updatedStats[memberId] = {
+        ...updatedStats[memberId],
+        joinedAtTime: startedAt,
+        waitingSince: startedAt,
+      }
+    }
+
+    return {
+      ...session,
+      startedAt,
+      stats: updatedStats,
     }
   })
 
@@ -1474,14 +2487,19 @@ const endSession = () =>
     deleteQueue,
     addMember,
     addMembersBulk,
+    addVisitors,
     editMember,
     deleteMember,
+    editVisitor,
+    deleteVisitor,
     moveToPlaying,
     resignFromPlaying,
+    setParticipant,
     addCourt,
     removeCourt,
     renameCourt,
     updateCourtScore,
+    updateHistoryMatch,
     endMatch,
     generateRoster,
     forfeitMatch,
@@ -1494,6 +2512,8 @@ const endSession = () =>
     shuffleRoster,
     buildQueueList,
     exportSessionCSV,
+    shareSessionCSV,
+    startSession,
     endSession,
     toggleManualPick: (memberId: string) =>
       setManualPickIds((prev) =>
