@@ -7,7 +7,6 @@ import {
   skillOrder,
   type MatchHistory,
   type Member,
-  type MemberStats,
   type MatchmakingMode,
   type Session,
   type SessionHistory,
@@ -17,6 +16,10 @@ import {
 import { toast } from 'sonner'
 import { appendResultToStacks, buildStackRotation, buildUpcomingStackMatches, lockReturningMatches, removePlayersFromStacks, restorePlayersToStacks, skipNextStackPlayer } from '../lib/stacking'
 
+import {
+  clearLatePriority, getAdditionalMissedGames, getCourtWaitingRecords, getCurrentBenchWait,
+  getFinishedCourtWait, getTotalGames, isCourtLineupAvailable, recordBenchWaits,
+} from '../lib/queueSession'
 import { findSmartQueuePool } from '../lib/smartQueueCandidates'
 import { buildPairingCounts, calculateWaitingScore, selectSmartQueueArrangement } from '../lib/smartQueueScoring'
 
@@ -456,9 +459,6 @@ export function useRacketArenaState() {
       }
     })
   }
-  const getTotalGames = (stats: MemberStats) => {
-    return stats.gamesPlayed + stats.missedGames
-  }
   
   const moveToPlaying = (memberId: string) => {
     setSessions((prev) =>
@@ -470,26 +470,10 @@ export function useRacketArenaState() {
 
         const memberStats = session.stats[memberId]
 
-        const activeNonPriorityPlayers = session.playingIds.filter(
-          (id) => !session.priorityList.includes(id),
-        )
-
-        let lowestTotalGames = 0
-
-        if (activeNonPriorityPlayers.length > 0) {
-          lowestTotalGames = Math.min(
-            ...activeNonPriorityPlayers.map((id) =>
-              getTotalGames(session.stats[id]),
-            ),
-          )
-        }
-
-        const playerTotalGames = getTotalGames(memberStats)
-
-        const missedGames = Math.max(
-          memberStats.missedGames,
-          lowestTotalGames - playerTotalGames,
-        )
+        const additionalMissedGames = getAdditionalMissedGames(session, memberStats)
+        const missedGames = session.matchmakingMode === 'smart-queue'
+          ? memberStats.missedGames + additionalMissedGames
+          : Math.max(memberStats.missedGames, additionalMissedGames)
 
         const arrivedAt = Date.now()
         const updatedStats = {
@@ -501,7 +485,9 @@ export function useRacketArenaState() {
           joinedAtTime: memberStats.joinedAtTime ?? arrivedAt,
         }
 
-        const shouldPrioritize = missedGames > 0
+        const shouldPrioritize = session.matchmakingMode === 'smart-queue'
+          ? additionalMissedGames > 0
+          : missedGames > 0
         const isReturning = memberStats.gamesPlayed > 0
 
         return {
@@ -885,16 +871,10 @@ export function useRacketArenaState() {
 
     const stats = session.stats[memberId]
 
-    const currentWait =
-      Math.max(0, (session.endedAt ?? clock) - stats.waitingSince)
-
-    const averageWait =
-      stats.averageWaitMs ?? 0
-
-    return (
-      currentWait * 0.7 +
-      averageWait * 0.3
+    const inGame = session.courts.some(({ teamA, teamB }) =>
+      teamA.includes(memberId) || teamB.includes(memberId),
     )
+    return calculateWaitingScore(getCurrentBenchWait(session, memberId, clock, inGame), stats.averageWaitMs ?? 0)
   }
 
 const buildMatchSet = (
@@ -917,6 +897,11 @@ const buildMatchSet = (
   const waitingPlayers = new Set(session.playingIds.filter(
     (id) => !queuedPlayers.has(id) && !inGamePlayers.has(id),
   ))
+  const immediate = findCompatibleRoster(
+    session, [...waitingPlayers], preferredBasePlayerId, queuedPlayers, inGamePlayers, inGamePlayers,
+  )
+  if (immediate.length === 4) return immediate
+
   if (waitingPlayers.size === 3) {
     const eligiblePlayers = new Set(waitingPlayers)
     for (const court of activeCourts) {
@@ -940,11 +925,13 @@ const buildMatchSet = (
         activeCourts.length,
         Math.max(1, Math.round(n / activeCourts.length)),
       )
-  const blockedInGamePlayers = new Set(
-    activeCourts.slice(eligibleCourtCount).flatMap((court) => [...court.teamA, ...court.teamB]),
-  )
+  if (!eligibleCourtCount) return []
+  const futurePlayers = new Set(activeCourts.slice(0, eligibleCourtCount)
+    .flatMap(({ teamA, teamB }) => [...teamA, ...teamB]))
+  const blockedInGamePlayers = new Set([...inGamePlayers].filter((id) => !futurePlayers.has(id)))
   return findCompatibleRoster(
-    session, queueList, preferredBasePlayerId, queuedPlayers, inGamePlayers, blockedInGamePlayers,
+    session, [...new Set([...queueList, ...session.playingIds])], preferredBasePlayerId,
+    queuedPlayers, inGamePlayers, blockedInGamePlayers,
   )
 }
 
@@ -957,22 +944,24 @@ const findCompatibleRoster = (
   blockedInGamePlayers: ReadonlySet<string>,
 ) => {
   const priority = new Set(session.priorityList)
+  const arrivalOrder = new Map(session.playingIds.map((id, index) => [id, index]))
   const now = Date.now()
+  if (queueList.length < 4) return []
   const players = [...new Set(queueList)]
     .filter((id) =>
-      session.playingIds.includes(id) && session.stats[id] && memberById[id]
+      arrivalOrder.has(id) && session.stats[id] && memberById[id]
       && !queuedPlayers.has(id) && !blockedInGamePlayers.has(id),
     )
     .map((id) => {
       const stats = session.stats[id]
-      const currentWait = session.startedAt && !inGamePlayers.has(id) ? Math.max(0, now - stats.waitingSince) : 0
+      const currentWait = getCurrentBenchWait(session, id, now, inGamePlayers.has(id))
       return {
         id,
         totalGames: getTotalGames(stats),
         skill: getSkillLevel(id),
         waitingScore: calculateWaitingScore(currentWait, stats.averageWaitMs ?? 0),
         latePriority: priority.has(id),
-        arrivalOrder: stats.joinedAtTime ?? stats.joinedAt,
+        arrivalOrder: arrivalOrder.get(id)!,
       }
     })
   const pool = findSmartQueuePool(players, preferredBasePlayerId)
@@ -1446,31 +1435,23 @@ const findCompatibleRoster = (
         return session
       }
       const roster = session.rosters.find((r) => r.id === rosterId)
-      if (!roster) return session
+      if (!roster || roster.playerIds.length !== 4) return session
       const court = courtId
         ? session.courts.find((c) => c.id === courtId && c.teamA.length === 0 && c.teamB.length === 0)
         : session.courts.find((c) => c.teamA.length === 0 && c.teamB.length === 0)
       if (!court) return session
-        const hasInGamePlayer = roster.playerIds.some(
-          (playerId) =>
-            session.courts.some(
-              (court) =>
-                court.teamA.includes(playerId) ||
-                court.teamB.includes(playerId),
-            ),
-        )
+      if (!isCourtLineupAvailable(session, roster.playerIds)) {
+        toast.warning('Cannot start queue. One or more players are unavailable.')
+        return session
+      }
 
-        if (hasInGamePlayer) {
-          toast.warning(
-            'Cannot start queue. One or more players are still in-game.',
-          )
-
-          return session
-        }
-
+      const startedAt = Date.now()
+      const waitingRecords = getCourtWaitingRecords(session, roster.playerIds, startedAt)
       const [a1, a2, b1, b2] = roster.playerIds
       return {
         ...session,
+        ...clearLatePriority(session, roster.playerIds),
+        stats: recordBenchWaits(session, waitingRecords),
         rosters: session.rosters.filter((r) => r.id !== rosterId),
         courts: session.courts.map((c) =>
           c.id === court.id
@@ -1480,7 +1461,8 @@ const findCompatibleRoster = (
                 teamB: [b1, b2],
                 scoreA: 0,
                 scoreB: 0,
-                startedAt: Date.now(),
+                startedAt,
+                waitingRecords,
               }
             : c,
         ),
@@ -1594,12 +1576,14 @@ const findCompatibleRoster = (
       }
       const automatic = !matchId && next?.complete && !next.manual ? next : null
       const match = manualMatch ?? automatic
-      if (!match || match.playerIds.length !== 4) return session
+      if (!match || !isCourtLineupAvailable(session, match.playerIds)) return session
       const stack = manualMatch
         ? { ...session.winLoseStack, manualMatches: session.winLoseStack.manualMatches.filter((item) => item.id !== manualMatch.id) }
         : { ...removePlayersFromStacks(session.winLoseStack, match.playerIds), playingNext: automatic!.playingNextAfter }
       const dispatchedIndex = manualMatch ? -1 : buildStackRotation(session.winLoseStack)
         .findIndex((item) => item.playerIds[0] === match.playerIds[0])
+      const startedAt = Date.now()
+      const waitingRecords = getCourtWaitingRecords(session, match.playerIds, startedAt)
       const [first, second, third, fourth] = match.playerIds
       const teams = [
         [[first, third], [second, fourth]],
@@ -1608,6 +1592,7 @@ const findCompatibleRoster = (
       ][session.winLoseStack.teamRotation ?? 0]
       return {
         ...session,
+        stats: recordBenchWaits(session, waitingRecords),
         winLoseStack: {
           ...stack,
           prioritizedPlayerIds: undefined,
@@ -1623,7 +1608,8 @@ const findCompatibleRoster = (
           teamB: teams[1],
           scoreA: 0,
           scoreB: 0,
-          startedAt: Date.now(),
+          startedAt,
+          waitingRecords,
           stackPlayerSources: match.playerSources,
         } : item),
       }
@@ -1647,16 +1633,11 @@ const findCompatibleRoster = (
       const target = session.courts.find((court) => court.id === courtId)
       if (!target || target.teamA.length === 0 || target.teamB.length === 0) return session
       
-      const updatedStats = { ...session.stats }
-      for (const memberId of [...target.teamA, ...target.teamB]) {
-        updatedStats[memberId] = {
-          ...updatedStats[memberId],
-          waitingSince: updatedStats[memberId].waitingSince ?? Date.now(),
-        }
-      }
+      const { stats } = getFinishedCourtWait(session, target, Date.now())
       return {
         ...session,
-        stats: updatedStats,
+        stats,
+        ...(session.matchmakingMode === 'smart-queue' ? clearLatePriority(session, [...target.teamA, ...target.teamB]) : {}),
         winLoseStack:
           session.matchmakingMode === 'win-lose-stack' && target.stackPlayerSources
             ? restorePlayersToStacks(session.winLoseStack, target.stackPlayerSources)
@@ -1670,6 +1651,7 @@ const findCompatibleRoster = (
                 scoreA: 0,
                 scoreB: 0,
                 startedAt: null,
+                waitingRecords: undefined,
               }
             : court,
         ),
@@ -1745,113 +1727,18 @@ const findCompatibleRoster = (
           : matchResult === 'teamA'
             ? target.teamA
             : target.teamB
-      const updatedStats = { ...session.stats }
       const endedAt = Date.now()
       const startedAt = target.startedAt ?? endedAt
       const matchPlayerIds = [...target.teamA, ...target.teamB]
-      const waitingRecords = matchPlayerIds.map((memberId) => {
-        const waitingStartedAt =
-          updatedStats[memberId]?.waitingSince ?? startedAt
-
-        return {
-          memberId,
-          waitingStartedAt,
-          matchStartedAt: startedAt,
-          waitingMs: Math.max(0, startedAt - waitingStartedAt),
-          gameNumber: (updatedStats[memberId]?.gamesPlayed ?? 0) + 1,
-        }
-      })
-      // for (const memberId of matchPlayerIds) {
-      //   updatedStats[memberId] = {
-      //     ...updatedStats[memberId],
-      //     gamesPlayed: updatedStats[memberId].gamesPlayed + 1,
-      //     wins: updatedStats[memberId].wins + (winnerIds.includes(memberId) ? 1 : 0),
-      //     waitingSince: endedAt,
-      //   }
-      // }
+      const { stats: updatedStats, waitingRecords } = getFinishedCourtWait(session, target, endedAt)
       for (const memberId of matchPlayerIds) {
-        const waitingRecord =
-          waitingRecords.find(
-            (record) => record.memberId === memberId,
-          )
-
-        const waitingMs =
-          waitingRecord?.waitingMs ?? 0
-
-        const totalWaitMs =
-          (updatedStats[memberId].totalWaitMs ?? 0) +
-          waitingMs
-
-        const waitPeriods =
-          (updatedStats[memberId].waitPeriods ?? 0) +
-          1
-
+        const stats = updatedStats[memberId]
         updatedStats[memberId] = {
-          ...updatedStats[memberId],
-
-          gamesPlayed:
-            updatedStats[memberId].gamesPlayed + 1,
-
-          wins:
-            updatedStats[memberId].wins +
-            (winnerIds.includes(memberId) ? 1 : 0),
-
-          waitingSince: endedAt,
-
-          totalWaitMs,
-          waitPeriods,
-
-          averageWaitMs:
-            totalWaitMs / waitPeriods,
+          ...stats,
+          gamesPlayed: stats.gamesPlayed + 1,
+          wins: stats.wins + Number(winnerIds.includes(memberId)),
         }
       }
-
-      // Recalculate missedGames and update priorityList after match ends
-      const inGamePlayers = new Set(
-        session.courts
-          .filter((c) => c.id !== courtId)
-          .flatMap((court) => [...court.teamA, ...court.teamB]),
-      )
-
-      const activeNonPriorityPlayers = session.playingIds.filter(
-        (id) =>
-          !session.priorityList.includes(id) &&
-          !matchPlayerIds.includes(id),
-      )
-
-      let lowestTotalGames = 0
-      if (activeNonPriorityPlayers.length > 0) {
-        lowestTotalGames = Math.min(
-          ...activeNonPriorityPlayers.map((id) =>
-            getTotalGames(updatedStats[id]) + (inGamePlayers.has(id) ? 1 : 0),
-          ),
-        )
-      }
-
-      // Update priorityList: remove players whose missedGames is now 0
-      const updatedPriorityList = session.priorityList.filter((id) => {
-        
-        if (!matchPlayerIds.includes(id)) {
-          return true // Keep non-match players as they are
-        }
-        const newMissedGames = 
-          lowestTotalGames - getTotalGames(updatedStats[id],
-        )
-        return newMissedGames > 0
-      })
-      const removedFromPriority =
-        session.priorityList.filter(
-          (id) => !updatedPriorityList.includes(id),
-        ) 
-
-      const updatedPlayerList = [
-        ...session.playerList,
-        ...removedFromPriority.filter(
-          (id) => !session.playerList.includes(id),
-        ),
-        
-        
-      ]
 
       const stackBeforeResult = session.matchmakingMode === 'win-lose-stack'
         ? lockReturningMatches(session.winLoseStack, session.courts)
@@ -1877,14 +1764,9 @@ const findCompatibleRoster = (
         
         ...session,
         stats: updatedStats,
-        priorityList:
-          session.matchmakingMode === 'win-lose-stack'
-            ? session.priorityList
-            : updatedPriorityList,
-        playerList:
-          session.matchmakingMode === 'win-lose-stack'
-            ? session.playerList
-            : updatedPlayerList,
+        ...(session.matchmakingMode === 'smart-queue'
+          ? clearLatePriority(session, matchPlayerIds)
+          : {}),
         winLoseStack:
           session.matchmakingMode === 'win-lose-stack'
             ? { ...nextWinLoseStack, calibrationComplete }
@@ -1915,8 +1797,9 @@ const findCompatibleRoster = (
                 teamB: [],
                 scoreA: 0,
                 scoreB: 0,
-              startedAt: null,
-              stackPlayerSources: undefined,
+                startedAt: null,
+                waitingRecords: undefined,
+                stackPlayerSources: undefined,
               }
             : court,
         ),

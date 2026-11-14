@@ -5,6 +5,8 @@ import { TrophyIcon, FlagIcon, TrashIcon, BoltIcon, ArrowPathRoundedSquareIcon, 
 import { Timer, Watch } from 'lucide-react'
 import { toast } from 'sonner'
 import { WinLoseStackView } from './WinLoseStackView'
+import { getCurrentBenchWait, getTotalGames } from '../lib/queueSession'
+import { calculateWaitingScore } from '../lib/smartQueueScoring'
 
 type QueuePageProps = {
   session: Session
@@ -229,19 +231,7 @@ export function QueuePage({
   }
   const getFairnessScore = (memberId: string) => {
     if (!session.startedAt) return 0
-
-    const stats = session.stats[memberId]
-
-    const currentWait =
-      Math.max(0, now - stats.waitingSince)
-
-    const averageWait =
-      stats.averageWaitMs ?? 0
-
-    return (
-      currentWait * 0.7 +
-      averageWait * 0.3
-    )
+    return calculateWaitingScore(getCurrentWaitMs(memberId), session.stats[memberId].averageWaitMs ?? 0)
   }
   const getSkillScore = (skill: Member['skill']) => {
     switch (skill) {
@@ -275,19 +265,8 @@ export function QueuePage({
       return total + skillScore(member.skill) + 1
     }, 0)
 
-  const getTotalGames = (
-    stats: MemberStats,
-  ) => {
-    return (
-      stats.gamesPlayed +
-      stats.missedGames
-    )
-  }
-
-  const getCurrentWaitMs = (stats: MemberStats) => {
-    if (!session.startedAt) return 0
-    return Math.max(0, now - stats.waitingSince)
-  }
+  const getCurrentWaitMs = (id: string) =>
+    getCurrentBenchWait(session, id, now, getSessionPlayerStatus(id, session) === 'playing')
 
   const getSortedPlayers = () => {
     const queueList =
@@ -345,7 +324,7 @@ export function QueuePage({
       }
 
       if (playersSort === 'waitingTime') {
-        const waitDifference = getCurrentWaitMs(b.stats) - getCurrentWaitMs(a.stats)
+        const waitDifference = getCurrentWaitMs(b.id) - getCurrentWaitMs(a.id)
         return waitDifference || memberById[a.id].name.localeCompare(memberById[b.id].name)
       }
 
@@ -774,7 +753,7 @@ export function QueuePage({
                     ) : (
                       <>
                         <Timer size={14} />
-                        {formatDurationMs(getCurrentWaitMs(stats))}
+                        {formatDurationMs(getCurrentWaitMs(memberId))}
                       </>
                     )}
                   </span>

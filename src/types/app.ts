@@ -75,7 +75,16 @@ export type Court = {
   scoreA: number
   scoreB: number
   startedAt: number | null
+  waitingRecords?: MatchWaitingRecord[]
   stackPlayerSources?: Record<string, StackType>
+}
+
+export type MatchWaitingRecord = {
+  memberId: string
+  waitingStartedAt: number
+  matchStartedAt: number
+  waitingMs: number
+  gameNumber: number
 }
 
 export type MatchHistory = {
@@ -89,13 +98,7 @@ export type MatchHistory = {
   startedAt?: number | null
   endedAt: number
   durationMs?: number
-  waitingRecords?: {
-    memberId: string
-    waitingStartedAt: number
-    matchStartedAt: number
-    waitingMs: number
-    gameNumber: number
-  }[]
+  waitingRecords?: MatchWaitingRecord[]
 }
 
 export type Session = {

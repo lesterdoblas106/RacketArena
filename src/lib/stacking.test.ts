@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { appendResultToStacks, buildStackRotation, buildUpcomingStackMatches, lockReturningMatches, removePlayersFromStacks, skipNextStackPlayer } from './stacking'
+import { appendResultToStacks, buildStackRotation, buildUpcomingStackMatches, lockReturningMatches, removePlayersFromStacks, skipNextStackPlayer } from './stacking.ts'
 import type { WinLoseStackState } from '../types/app'
 
 const state = (overrides: Partial<WinLoseStackState> = {}): WinLoseStackState => ({
