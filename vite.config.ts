@@ -19,8 +19,8 @@ export default defineConfig({
         short_name: 'Racket Arena',
         description:
           'Queue players and manage court rotation for badminton sessions.',
-        theme_color: '#0d9488',
-        background_color: '#042f2e',
+        theme_color: '#0A1F44',
+        background_color: '#071633',
         display: 'standalone',
         orientation: 'portrait',
         scope: '/',

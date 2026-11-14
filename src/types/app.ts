@@ -1,3 +1,4 @@
+import { createId } from '../lib/createId'
 export type Skill =
   | 'Newbie'
   | 'Beginner'
@@ -11,6 +12,38 @@ export type Member = {
   id: string
   name: string
   skill: Skill
+}
+
+export type MatchmakingMode = 'smart-queue' | 'win-lose-stack'
+export type StackType = 'unplayed' | 'winner' | 'loser' | 'returning'
+export type PlayingNext = 'winner' | 'loser'
+
+export type StackManualMatch = {
+  id: string
+  playerIds: string[]
+  playerSources: Record<string, StackType>
+  createdAt: string
+}
+
+export type WinLoseStackState = {
+  unplayed: string[]
+  winners: string[]
+  losers: string[]
+  returning?: string[]
+  returningMatches?: {
+    index: number
+    playerIds: string[]
+    playerSources: Record<string, StackType>
+    playingNextAfter: PlayingNext
+  }[]
+  prioritizedPlayerIds?: string[]
+  playingNext: PlayingNext
+  // Players who are part of the active calibration round. This starts with
+  // the roster at session start and includes arrivals before calibration ends.
+  initialPlayerIds: string[]
+  calibrationComplete: boolean
+  manualMatches: StackManualMatch[]
+  teamRotation: number
 }
 
 export type MemberStats = {
@@ -42,6 +75,7 @@ export type Court = {
   scoreA: number
   scoreB: number
   startedAt: number | null
+  stackPlayerSources?: Record<string, StackType>
 }
 
 export type MatchHistory = {
@@ -82,6 +116,8 @@ export type Session = {
   arrivalCounter: number
   sessionHistory: SessionHistory[]
   visitors: Member[]
+  matchmakingMode: MatchmakingMode
+  winLoseStack: WinLoseStackState
 }
 
 export type SessionHistory = {
@@ -151,7 +187,7 @@ export const buildDefaultStats = (
   }, {})
 
 export const createSession = (name: string, members: Member[]): Session => ({
-  id: crypto.randomUUID(),
+  id: createId(),
   name,
   startedAt: null,
   endedAt: null,
@@ -164,7 +200,7 @@ export const createSession = (name: string, members: Member[]): Session => ({
   createdAt: new Date().toISOString(),
   courts: [
     {
-      id: crypto.randomUUID(),
+      id: createId(),
       name: 'Court 1',
       teamA: [],
       teamB: [],
@@ -178,4 +214,15 @@ export const createSession = (name: string, members: Member[]): Session => ({
   arrivalCounter: 0,
   sessionHistory: [],
   visitors: [],
+  matchmakingMode: 'smart-queue',
+  winLoseStack: {
+    unplayed: [],
+    winners: [],
+    losers: [],
+    playingNext: 'winner',
+    initialPlayerIds: [],
+    calibrationComplete: false,
+    manualMatches: [],
+    teamRotation: 0,
+  },
 })

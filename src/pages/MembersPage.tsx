@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { Modal, ModalForm } from '../components/Modal'
-import { skillOrder, type Member, type Session, type Skill } from '../types/app'
+import { MatchmakingModeOptions } from '../components/MatchmakingModeOptions'
+import { skillOrder, type MatchmakingMode, type Member, type Session, type Skill } from '../types/app'
 import { toast } from 'sonner'
 
 type MembersPageProps = {
@@ -15,6 +16,7 @@ type MembersPageProps = {
   onDeleteVisitor: (visitorId: string) => void
   onStartQueue: () => void
   onEndQueue: (endedAt?: number) => void
+  onEditSessionDetails: (name: string, matchmakingMode: MatchmakingMode) => void
 }
 
 const skillBorderClass = (skill: Member['skill']) =>
@@ -63,7 +65,7 @@ const PlayIcon = () => (
 
 )
 
-export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying, onResign, onSetParticipant, onAddVisitors, onEditVisitor, onDeleteVisitor, onStartQueue, onEndQueue }: MembersPageProps) {
+export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying, onResign, onSetParticipant, onAddVisitors, onEditVisitor, onDeleteVisitor, onStartQueue, onEndQueue, onEditSessionDetails }: MembersPageProps) {
   const [visitorModalOpen, setVisitorModalOpen] = useState(false)
   const [clubMembersOpen, setClubMembersOpen] = useState(false)
   const [visitorText, setVisitorText] = useState('')
@@ -72,10 +74,13 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
   const [resignModal, setResignModal] = useState<{ memberId: string; label: string } | null>(null)
   const [endQueueCheckOpen, setEndQueueCheckOpen] = useState(false)
   const [endQueueConfirmOpen, setEndQueueConfirmOpen] = useState(false)
+  const [sessionEdit, setSessionEdit] = useState<{ name: string; matchmakingMode: MatchmakingMode } | null>(null)
   const [participantSort, setParticipantSort] = useState<'name' | 'status'>('name')
 
   const isQueueEnded = Boolean(session.endedAt)
   const isQueueStarted = Boolean(session.startedAt)
+  const isWinLoseStack = session.matchmakingMode === 'win-lose-stack'
+  const matchmakingModeLabel = isWinLoseStack ? 'Win/Lose Stacking' : 'Smart Queue'
   const hasActiveCourt = session.courts.some((court) => court.teamA.length > 0 || court.teamB.length > 0)
   const hasPendingQueue = session.rosters.length > 0
   const participantIds = session.participantIds ?? []
@@ -86,6 +91,7 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
     () => [...clubMembers].sort((a, b) => a.name.localeCompare(b.name)).map((member) => member.id),
     [clubMembers],
   )
+  const selectedClubMemberCount = clubMemberIds.filter((memberId) => participantIds.includes(memberId)).length
   const statusFor = (memberId: string) => {
     if (session.playingIds.includes(memberId)) return 'Playing'
     if ((session.stats[memberId]?.gamesPlayed ?? 0) > 0) return `Resting (${session.stats[memberId].gamesPlayed})`
@@ -134,13 +140,23 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
       <article className="card queue-session-card">
         <div className={queueHeaderClass}>
           <div>
-            <span className="queue-session-label">Queue Session</span>
+            <span className="queue-session-label">Queue Session · {matchmakingModeLabel}</span>
             <div className="queue-session-title-row">
               <h3>{session.name ?? 'Current Queue'}</h3>
               <span className="queue-session-member-count">{participantIds.length} participants</span>
             </div>
           </div>
-          <span className="queue-session-status">{queueStatusLabel}</span>
+          <div className="queue-session-header-actions">
+            {!isQueueStarted && (
+              <button
+                className="ghost small"
+                onClick={() => setSessionEdit({ name: session.name, matchmakingMode: session.matchmakingMode })}
+              >
+                Edit
+              </button>
+            )}
+            <span className="queue-session-status">{queueStatusLabel}</span>
+          </div>
         </div>
         <div className="queue-session-stats">
           <div>
@@ -148,18 +164,36 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
             <span>Playing</span>
           </div>
           <div>
-            <strong>{participantIds.filter((id) => !session.playingIds.includes(id) && (session.stats[id]?.gamesPlayed ?? 0) > 0).length}</strong>
+            <strong>
+              {participantIds.filter((id) =>
+                !session.playingIds.includes(id) && (session.stats[id]?.gamesPlayed ?? 0) > 0,
+              ).length}
+            </strong>
             <span>Resting</span>
           </div>
           <div>
-            <strong>{participantIds.filter((id) => !session.playingIds.includes(id) && (session.stats[id]?.gamesPlayed ?? 0) === 0).length}</strong>
+            <strong>
+              {participantIds.filter((id) =>
+                !session.playingIds.includes(id) && (session.stats[id]?.gamesPlayed ?? 0) === 0,
+              ).length}
+            </strong>
             <span>Not arrived</span>
           </div>
         </div>
         <div className="queue-session-actions">
-          {isQueueStarted ? 
-          <button className="danger small" onClick={() => setEndQueueCheckOpen(true)} disabled={isQueueEnded}>{session.endedAt ? 'Queue Ended' : 'End Queue'}</button> : 
-          <button className="primary small" onClick={onStartQueue} disabled={isQueueEnded}>Start Queue</button>}
+          {isQueueStarted ? (
+            <button
+              className="danger small"
+              onClick={() => setEndQueueCheckOpen(true)}
+              disabled={isQueueEnded}
+            >
+              {session.endedAt ? 'Queue Ended' : 'End Queue'}
+            </button>
+          ) : (
+            <button className="primary small" onClick={onStartQueue} disabled={isQueueEnded}>
+              Start Queue
+            </button>
+          )}
         </div>
       </article>
 
@@ -167,36 +201,93 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
         <div className="member-card-header">
           <h4>Participants ({participantIds.length})</h4>
           <div className="member-card-actions">
-            <select value={participantSort} onChange={(event) => setParticipantSort(event.target.value as 'name' | 'status')}>
+            <select
+              value={participantSort}
+              onChange={(event) => setParticipantSort(event.target.value as 'name' | 'status')}
+            >
               <option value="name">Name</option>
-              <option value="status">Status</option></select>
-              <button className="primary small" onClick={() => setClubMembersOpen(true)}>Manage</button>
-            </div>
+              <option value="status">Status</option>
+            </select>
+            <button className="primary small" onClick={() => setClubMembersOpen(true)}>Manage</button>
           </div>
+        </div>
         {visitors.length > 0 && (
           <p className="participant-breakdown">
             Members {memberParticipantCount}, Visitors {visitors.length}
           </p>
         )}
-        <div className="list">{sortedParticipantIds.length ? sortedParticipantIds.map((memberId) => {
-          const status = statusFor(memberId)
-          const isPlaying = session.playingIds.includes(memberId)
-          const isResting = !isPlaying && (session.stats[memberId]?.gamesPlayed ?? 0) > 0
-          return <div key={memberId} className={`row row-skill ${skillBorderClass(memberById[memberId].skill)} ${isPlaying ? 'participant-playing' : isResting ? 'participant-resting' : ''}`}><div className="compact-player-row"><strong>{memberById[memberId].name}</strong><div className="compact-player-meta"><span className="compact-skill" style={{ color: skillColor(memberById[memberId].skill) }}>{memberById[memberId].skill}</span><span className={`compact-stats participant-status ${isPlaying ? 'participant-status-playing' : isResting ? 'participant-status-resting' : 'participant-status-not-arrived'}`}>{status}</span></div>{isPlaying ? <button className="danger small participant-action" disabled={isQueueEnded} onClick={() => setResignModal({ memberId, label: memberById[memberId].name })} title="Exit" aria-label="Exit"><ExitIcon /></button> : renderMoveToPlayingButton(memberId)}</div></div>
-        }) : <p className="subtle">No participants yet. Select club members with Manage.</p>}</div>
+        <div className="list">
+          {sortedParticipantIds.length ? (
+            sortedParticipantIds.map((memberId) => {
+              const member = memberById[memberId]
+              const status = statusFor(memberId)
+              const isPlaying = session.playingIds.includes(memberId)
+              const isResting = !isPlaying && (session.stats[memberId]?.gamesPlayed ?? 0) > 0
+              const skillClass = isWinLoseStack ? '' : `row-skill ${skillBorderClass(member.skill)}`
+              const rowStatus = isPlaying ? 'participant-playing' : isResting ? 'participant-resting' : ''
+              const badgeStatus = isPlaying
+                ? 'participant-status-playing'
+                : isResting
+                  ? 'participant-status-resting'
+                  : 'participant-status-not-arrived'
+
+              return (
+                <div key={memberId} className={`row ${skillClass} ${rowStatus}`}>
+                  <div className="compact-player-row">
+                    <strong>{member.name}</strong>
+                    <div className="compact-player-meta">
+                      {!isWinLoseStack && (
+                        <span className="compact-skill" style={{ color: skillColor(member.skill) }}>
+                          {member.skill}
+                        </span>
+                      )}
+                      <span className={`compact-stats participant-status ${badgeStatus}`}>
+                        {status}
+                      </span>
+                    </div>
+                    {isPlaying ? (
+                      <button
+                        className="danger small participant-action"
+                        disabled={isQueueEnded}
+                        onClick={() => setResignModal({ memberId, label: member.name })}
+                        title="Exit"
+                        aria-label="Exit"
+                      >
+                        <ExitIcon />
+                      </button>
+                    ) : (
+                      renderMoveToPlayingButton(memberId)
+                    )}
+                  </div>
+                </div>
+              )
+            })
+          ) : (
+            <p className="subtle">No participants yet. Select club members with Manage.</p>
+          )}
+        </div>
       </article>
 
       <article className="card member-section-card">
         <div className="member-card-header">
           <h4>Visitors ({visitors.length})</h4>
-          <button className="primary small" disabled={isQueueEnded} onClick={() => { setVisitorText(''); setVisitorModalOpen(true) }}>Add Visitors</button>
+          <button
+            className="primary small"
+            disabled={isQueueEnded}
+            onClick={() => {
+              setVisitorText('')
+              setVisitorModalOpen(true)
+            }}
+          >
+            Add Visitors
+          </button>
         </div>
         {visitors.length ? (
           <div className="club-member-list visitor-list">
             {visitors.map((visitor) => {
               const isEditing = editingVisitor?.id === visitor.id
               return (
-                <div key={visitor.id} className={`club-member-card ${skillBorderClass(visitor.skill)}`}>
+                <div key={visitor.id} className={`club-member-card ${isWinLoseStack ? '' : skillBorderClass(visitor.skill)}`}>
                   <div className="club-member-info">
                     {isEditing ? (
                       <>
@@ -205,25 +296,44 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
                           value={editingVisitor.name}
                           onChange={(event) => setEditingVisitor({ ...editingVisitor, name: event.target.value })}
                         />
-                        <select
-                          className="club-member-inline-skill"
-                          value={editingVisitor.skill}
-                          onChange={(event) => setEditingVisitor({ ...editingVisitor, skill: event.target.value as Skill })}
-                        >
-                          {skillOrder.map((skill) => <option key={skill} value={skill}>{skill}</option>)}
-                        </select>
+                        {!isWinLoseStack && (
+                          <select
+                            className="club-member-inline-skill"
+                            value={editingVisitor.skill}
+                            onChange={(event) =>
+                              setEditingVisitor({ ...editingVisitor, skill: event.target.value as Skill })
+                            }
+                          >
+                            {skillOrder.map((skill) => (
+                              <option key={skill} value={skill}>{skill}</option>
+                            ))}
+                          </select>
+                        )}
                       </>
                     ) : (
                       <>
                         <p className="club-member-name">{visitor.name}</p>
-                        <p className="club-member-skill" style={{ color: skillColor(visitor.skill) }}>{visitor.skill}</p>
+                        {!isWinLoseStack && (
+                          <p className="club-member-skill" style={{ color: skillColor(visitor.skill) }}>
+                            {visitor.skill}
+                          </p>
+                        )}
                       </>
                     )}
                   </div>
                   <div className="club-card-actions club-member-actions">
                     {isEditing ? (
                       <>
-                        <button className="club-action-button club-action-save" onClick={() => { onEditVisitor(visitor.id, editingVisitor.name, editingVisitor.skill); setEditingVisitor(null) }} disabled={!editingVisitor.name.trim()}>Save</button>
+                        <button
+                          className="club-action-button club-action-save"
+                          onClick={() => {
+                            onEditVisitor(visitor.id, editingVisitor.name, editingVisitor.skill)
+                            setEditingVisitor(null)
+                          }}
+                          disabled={!editingVisitor.name.trim()}
+                        >
+                          Save
+                        </button>
                         <button className="club-action-button club-action-cancel" onClick={() => setEditingVisitor(null)}>Cancel</button>
                       </>
                     ) : (
@@ -237,12 +347,14 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
               )
             })}
           </div>
-        ) : <p className="subtle">No visitors added for this session.</p>}
+        ) : (
+          <p className="subtle">No visitors added for this session.</p>
+        )}
       </article>
 
       <Modal
         open={clubMembersOpen}
-        title={`Club Members (${session.playingIds.length} playing)`}
+        title={`Club Members (${selectedClubMemberCount} playing)`}
         onClose={() => setClubMembersOpen(false)}
         footer={
           <div className="club-members-modal-footer">
@@ -250,25 +362,185 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
           </div>
         }
       >
-        <div className="list">{clubMemberIds.map((memberId) => {
-          const selected = participantIds.includes(memberId)
-          return <div key={memberId} className={`row row-skill ${skillBorderClass(memberById[memberId].skill)} ${selected ? 'participant-playing' : ''}`}>
-            <div className="compact-player-row">
-              <strong>{memberById[memberId].name}</strong>
-              <div className="compact-player-meta">
-                <span className="compact-skill" style={{ color: skillColor(memberById[memberId].skill) }}>{memberById[memberId].skill}</span>
+        <div className="list">
+          {clubMemberIds.map((memberId) => {
+            const member = memberById[memberId]
+            const selected = participantIds.includes(memberId)
+            const skillClass = isWinLoseStack ? '' : `row-skill ${skillBorderClass(member.skill)}`
+            const rowStatus = selected ? 'participant-playing' : ''
+
+            return (
+              <div key={memberId} className={`row ${skillClass} ${rowStatus}`}>
+                <div className="compact-player-row">
+                  <strong>{member.name}</strong>
+                  <div className="compact-player-meta">
+                    {!isWinLoseStack && (
+                      <span className="compact-skill" style={{ color: skillColor(member.skill) }}>
+                        {member.skill}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    className={selected ? 'danger small' : 'play small'}
+                    disabled={isQueueEnded}
+                    onClick={() => onSetParticipant(memberId, !selected)}
+                    title={selected ? 'Remove participant' : 'Make participant'}
+                  >
+                    {selected ? <ResignIcon /> : <PlayerActionIcon />}
+                  </button>
+                </div>
               </div>
-              <button className={selected ? 'danger small' : 'play small'} disabled={isQueueEnded} onClick={() => onSetParticipant(memberId, !selected)} title={selected ? 'Remove participant' : 'Make participant'}>{selected ? <ResignIcon /> : <PlayerActionIcon />}</button>
-              </div>
-            </div>
-        })}</div>
+            )
+          })}
+        </div>
       </Modal>
 
-      <ModalForm open={visitorModalOpen} title="Add Visitors" onClose={() => setVisitorModalOpen(false)} onSubmit={submitVisitors} submitLabel="Add Visitors"><label className="field">One visitor per line<div className="bulk-help">Add a skill number after the name: 1-Newbie | 2-Beginner | 3-Low Intermediate | 4-Intermediate | 5-High Intermediate | 6-Advanced | 7-Elite. | No number defaults to Intermediate.</div><textarea className="bulk-textarea" value={visitorText} onChange={(event) => setVisitorText(event.target.value)} placeholder={'Anthony 3\nBawaw 5\nJohn'} required /></label></ModalForm>
-      <Modal open={Boolean(visitorDeleteModal)} title="Delete Visitor?" onClose={() => setVisitorDeleteModal(null)} footer={<><button onClick={() => setVisitorDeleteModal(null)}>Cancel</button><button className="danger" onClick={() => { if (!visitorDeleteModal) return; onDeleteVisitor(visitorDeleteModal.id); setVisitorDeleteModal(null) }}>Delete</button></>}><p>Remove "{visitorDeleteModal?.name}" from this session?</p></Modal>
-      <Modal open={Boolean(resignModal)} title="Exit Player?" onClose={() => setResignModal(null)} footer={<><button onClick={() => setResignModal(null)}>Cancel</button><button className="danger" disabled={isQueueEnded} onClick={() => { if (!resignModal) return; onResign(resignModal.memberId); setResignModal(null) }}>Exit</button></>}><p>Remove "{resignModal?.label}" from the playing list? They will remain a participant.</p></Modal>
-      <Modal open={endQueueCheckOpen} title="Before Ending Queue" onClose={() => setEndQueueCheckOpen(false)} footer={<><button onClick={() => setEndQueueCheckOpen(false)}>Cancel</button><button className="primary" onClick={handleEndQueuePreCheck}>Continue</button></>}><p>Make sure all courts are empty and there is no pending queue.</p></Modal>
-      <Modal open={endQueueConfirmOpen} title="End Queueing Session?" onClose={() => setEndQueueConfirmOpen(false)} footer={<><button onClick={() => setEndQueueConfirmOpen(false)}>Cancel</button><button className="danger" onClick={() => { onEndQueue(Date.now()); setEndQueueConfirmOpen(false) }}>End Queue</button></>}><p>Are you sure you want to end this Queueing Session? Once Ended, you can no longer Generate new matches.</p></Modal>
+      <ModalForm
+        open={visitorModalOpen}
+        title="Add Visitors"
+        onClose={() => setVisitorModalOpen(false)}
+        onSubmit={submitVisitors}
+        submitLabel="Add Visitors"
+      >
+        <label className="field">
+          One visitor per line
+          {!isWinLoseStack && (
+            <div className="bulk-help">
+              Add a skill number after the name: 1-Newbie | 2-Beginner | 3-Low Intermediate | 4-Intermediate | 5-High Intermediate | 6-Advanced | 7-Elite. | No number defaults to Intermediate.
+            </div>
+          )}
+          <textarea
+            className="bulk-textarea"
+            value={visitorText}
+            onChange={(event) => setVisitorText(event.target.value)}
+            placeholder={isWinLoseStack ? 'Anthony\nBawaw\nJohn' : 'Anthony 3\nBawaw 5\nJohn'}
+            required
+          />
+        </label>
+      </ModalForm>
+
+      <Modal
+        open={Boolean(visitorDeleteModal)}
+        title="Delete Visitor?"
+        onClose={() => setVisitorDeleteModal(null)}
+        footer={
+          <>
+            <button onClick={() => setVisitorDeleteModal(null)}>Cancel</button>
+            <button
+              className="danger"
+              onClick={() => {
+                if (!visitorDeleteModal) return
+                onDeleteVisitor(visitorDeleteModal.id)
+                setVisitorDeleteModal(null)
+              }}
+            >
+              Delete
+            </button>
+          </>
+        }
+      >
+        <p>Remove "{visitorDeleteModal?.name}" from this session?</p>
+      </Modal>
+
+      <Modal
+        open={Boolean(resignModal)}
+        title="Exit Player?"
+        onClose={() => setResignModal(null)}
+        footer={
+          <>
+            <button onClick={() => setResignModal(null)}>Cancel</button>
+            <button
+              className="danger"
+              disabled={isQueueEnded}
+              onClick={() => {
+                if (!resignModal) return
+                onResign(resignModal.memberId)
+                setResignModal(null)
+              }}
+            >
+              Exit
+            </button>
+          </>
+        }
+      >
+        <p>Resign "{resignModal?.label}" from the playing? They will remain a participant.</p>
+      </Modal>
+
+      <Modal
+        open={endQueueCheckOpen}
+        title="Before Ending Queue"
+        onClose={() => setEndQueueCheckOpen(false)}
+        footer={
+          <>
+            <button onClick={() => setEndQueueCheckOpen(false)}>Cancel</button>
+            <button className="primary" onClick={handleEndQueuePreCheck}>Continue</button>
+          </>
+        }
+      >
+        <p>Make sure all courts are empty and there is no pending queue.</p>
+      </Modal>
+
+      <Modal
+        open={endQueueConfirmOpen}
+        title="End Queueing Session?"
+        onClose={() => setEndQueueConfirmOpen(false)}
+        footer={
+          <>
+            <button onClick={() => setEndQueueConfirmOpen(false)}>Cancel</button>
+            <button
+              className="danger"
+              onClick={() => {
+                onEndQueue(Date.now())
+                setEndQueueConfirmOpen(false)
+              }}
+            >
+              End Queue
+            </button>
+          </>
+        }
+      >
+        <p>Are you sure you want to end this Queueing Session? Once Ended, you can no longer Generate new matches.</p>
+      </Modal>
+
+      <Modal
+        open={Boolean(sessionEdit)}
+        title="Edit Queue Session"
+        onClose={() => setSessionEdit(null)}
+        footer={
+          <>
+            <button onClick={() => setSessionEdit(null)}>Cancel</button>
+            <button
+              className="primary"
+              disabled={!sessionEdit?.name.trim()}
+              onClick={() => {
+                if (!sessionEdit) return
+                onEditSessionDetails(sessionEdit.name, sessionEdit.matchmakingMode)
+                setSessionEdit(null)
+              }}
+            >
+              Save
+            </button>
+          </>
+        }
+      >
+        {sessionEdit && (
+          <div className="modal-form">
+            <label className="field">
+              Session name
+              <input
+                value={sessionEdit.name}
+                onChange={(event) => setSessionEdit({ ...sessionEdit, name: event.target.value })}
+                autoFocus
+              />
+            </label>
+            <MatchmakingModeOptions
+              value={sessionEdit.matchmakingMode}
+              onChange={(matchmakingMode) => setSessionEdit({ ...sessionEdit, matchmakingMode })}
+              disabled={isQueueStarted}
+            />
+          </div>
+        )}
+      </Modal>
     </section>
   )
 }

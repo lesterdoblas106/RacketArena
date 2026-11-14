@@ -1,7 +1,9 @@
-import { useState, useEffect, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
+import { UserGroupIcon } from '@heroicons/react/24/outline'
+import { toast } from 'sonner'
 import { Modal, ModalForm } from '../components/Modal'
-import { skillOrder, type Member, type Session, type Skill } from '../types/app'
-import TourModal from "../components/onboarding/TourModal";
+import { MatchmakingModeOptions } from '../components/MatchmakingModeOptions'
+import { skillOrder, type MatchmakingMode, type Member, type Session, type Skill } from '../types/app'
 
 type ClubPageProps = {
   sessions: Session[]
@@ -10,9 +12,9 @@ type ClubPageProps = {
   clubMemberSort: 'name' | 'skill'
   onChangeQueueSort: (value: 'date' | 'name') => void
   onChangeMemberSort: (value: 'name' | 'skill') => void
-  onCreateQueue: (queue:{name: string, createdAt: string}) => void
+  onCreateQueue: (queue:{name: string, createdAt: string, matchmakingMode: MatchmakingMode}) => void
   onOpenSession: (sessionId: string) => void
-  onEditQueue: (sessionId: string, name: string) => void
+  onEditQueue: (sessionId: string, name: string, matchmakingMode: MatchmakingMode) => void
   onDeleteQueue: (sessionId: string) => void
   onAddMember: (name: string, skill: Skill) => void
   onAddMembersBulk: (names: string[], defaultSkill?: Skill) => void
@@ -50,6 +52,7 @@ export function ClubPage({
   const [createQueueOpen, setCreateQueueOpen] = useState(false)
   const [editQueueId, setEditQueueId] = useState<string | null>(null)
   const [queueName, setQueueName] = useState('')
+  const [matchmakingMode, setMatchmakingMode] = useState<MatchmakingMode>('smart-queue')
   const [newMemberName, setNewMemberName] = useState('')
   const [newMemberSkill, setNewMemberSkill] = useState<Skill>('Intermediate')
   const [editingMember, setEditingMember] = useState<{
@@ -66,15 +69,19 @@ export function ClubPage({
   
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [bulkMembersText, setBulkMembersText] = useState('')
-  const [showTour, setShowTour] = useState(false);
 
   const editingQueue = sessions.find((session) => session.id === editQueueId) ?? null
 
   const openEditQueue = (sessionId: string) => {
     const target = sessions.find((session) => session.id === sessionId)
     if (!target) return
+    if (target.endedAt != null) {
+      toast.warning('This session has ended and can’t be edited.')
+      return
+    }
     setEditQueueId(sessionId)
     setQueueName(target.name)
+    setMatchmakingMode(target.matchmakingMode)
   }
 
   const openEditMember = (memberId: string) => {
@@ -93,7 +100,8 @@ export function ClubPage({
      
     const newQueue = {
       name: queueName.trim(),
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      matchmakingMode,
     }
     onCreateQueue(newQueue)
     setQueueName('')
@@ -103,7 +111,7 @@ export function ClubPage({
   const submitEditQueue = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!editQueueId || !queueName.trim()) return
-    onEditQueue(editQueueId, queueName.trim())
+    onEditQueue(editQueueId, queueName.trim(), matchmakingMode)
     setEditQueueId(null)
     setQueueName('')
   }
@@ -134,14 +142,6 @@ export function ClubPage({
     setBulkModalOpen(false)
   }
   const [isQueueHistoryExpanded, setIsQueueHistoryExpanded] = useState(false)
-
-  useEffect(() => {
-      const completed = localStorage.getItem("tourCompleted");
-
-      if (!completed) {
-          setShowTour(true);
-      }
-  }, []);
 
   return (
         <section className="club-page">
@@ -181,6 +181,7 @@ export function ClubPage({
                 className="club-create-queue-card"
                 onClick={() => {
                   setQueueName('')
+                  setMatchmakingMode('smart-queue')
                   setCreateQueueOpen(true)
                 }}
               >
@@ -214,6 +215,9 @@ export function ClubPage({
                     }
                   >
                     {session.name}
+                    <span className="club-queue-mode-label">
+                      {session.matchmakingMode === 'win-lose-stack' ? 'Win/Lose Stacking' : 'Smart Queue'}
+                    </span>
                     {session.endedAt && (
                       <span className="club-queue-ended-label">
                         - session ended
@@ -326,13 +330,14 @@ export function ClubPage({
 
               <button
                 type="button"
-                className="club-toolbar-button club-toolbar-secondary"
+                className="club-toolbar-button club-bulk-add-button"
                 onClick={() => {
                   setBulkMembersText('')
                   setBulkModalOpen(true)
                 }}
               >
-                Bulk Add
+                <UserGroupIcon width={16} height={16} aria-hidden="true" />
+                Bulk Add Members
               </button>
 
             </div>
@@ -398,12 +403,13 @@ export function ClubPage({
       <ModalForm
         open={createQueueOpen}
         title="Create Queue"
+        fitMobileKeyboard
         onClose={() => setCreateQueueOpen(false)}
         onSubmit={submitCreateQueue}
         submitLabel="Create"
       >
         <div className="club-modal-fields">
-          <label className="club-form-field">
+          <div className="club-form-field">
             <span>Queue Name</span>
 
             <input
@@ -415,7 +421,8 @@ export function ClubPage({
               placeholder="e.g., Mpact Sundays - 25/04/26"
               required
             />
-          </label>
+            <MatchmakingModeOptions value={matchmakingMode} onChange={setMatchmakingMode} />
+          </div>
         </div>
       </ModalForm>
 
@@ -423,6 +430,7 @@ export function ClubPage({
       <ModalForm
         open={Boolean(editingQueue)}
         title="Edit Queue"
+        fitMobileKeyboard
         onClose={() => setEditQueueId(null)}
         onSubmit={submitEditQueue}
         submitLabel="Save"
@@ -440,6 +448,14 @@ export function ClubPage({
               required
             />
           </label>
+          <MatchmakingModeOptions
+            value={matchmakingMode}
+            onChange={setMatchmakingMode}
+            disabled={editingQueue?.startedAt != null}
+          />
+          {editingQueue?.startedAt != null && (
+            <small className="subtle">Matchmaking mode is locked once the queue starts.</small>
+          )}
         </div>
       </ModalForm>
 
@@ -533,11 +549,6 @@ export function ClubPage({
         </p>
       </Modal>
 
-      <TourModal
-        open={showTour}
-        startPage={0}
-        onClose={() => setShowTour(false)}
-      />
     </section>
     // <section className="club-page">
     //   <div className="club-page-content">
@@ -819,11 +830,6 @@ export function ClubPage({
     //         : `Remove member "${deleteModal?.label}" from all queues?`}
     //     </p>
     //   </Modal>
-    //   <TourModal
-    //     open={showTour}
-    //     startPage={0}
-    //     onClose={() => setShowTour(false)}
-    // />
     // </section>
   )
 }

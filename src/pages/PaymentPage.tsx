@@ -188,7 +188,8 @@ export function PaymentPage({ session, memberById }: PaymentPageProps) {
         type="number"
         min={0}
         step={step}
-        value={value}
+        value={value === 0 ? '' : value}
+        placeholder="0"
         onChange={(event) =>
           setPaymentState((prev) => ({
             ...prev,

@@ -1,4 +1,4 @@
-import type { FormEvent, ReactNode } from 'react'
+import { useEffect, useRef, type FormEvent, type ReactNode } from 'react'
 
 type ModalProps = {
   open: boolean
@@ -6,13 +6,41 @@ type ModalProps = {
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
+  fitMobileKeyboard?: boolean
 }
 
-export function Modal({ open, title, onClose, children, footer }: ModalProps) {
+export function Modal({ open, title, onClose, children, footer, fitMobileKeyboard }: ModalProps) {
+  const overlayRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open || !fitMobileKeyboard) return
+    const viewport = window.visualViewport
+    const overlay = overlayRef.current
+    if (!viewport || !overlay) return
+
+    const fitViewport = () => {
+      overlay.style.setProperty('--modal-viewport-top', `${viewport.offsetTop}px`)
+      overlay.style.setProperty('--modal-viewport-height', `${viewport.height}px`)
+    }
+
+    fitViewport()
+    viewport.addEventListener('resize', fitViewport)
+    viewport.addEventListener('scroll', fitViewport)
+    return () => {
+      viewport.removeEventListener('resize', fitViewport)
+      viewport.removeEventListener('scroll', fitViewport)
+    }
+  }, [open, fitMobileKeyboard])
+
   if (!open) return null
 
   return (
-    <div className="modal-overlay" role="presentation" onClick={onClose}>
+    <div
+      ref={overlayRef}
+      className={fitMobileKeyboard ? 'modal-overlay modal-overlay-fit-keyboard' : 'modal-overlay'}
+      role="presentation"
+      onClick={onClose}
+    >
       <section
         className="modal-card"
         role="dialog"
@@ -40,6 +68,7 @@ type ModalFormProps = {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   children: ReactNode
   submitLabel: string
+  fitMobileKeyboard?: boolean
 }
 
 export function ModalForm({
@@ -49,12 +78,14 @@ export function ModalForm({
   onSubmit,
   children,
   submitLabel,
+  fitMobileKeyboard,
 }: ModalFormProps) {
   return (
     <Modal
       open={open}
       title={title}
       onClose={onClose}
+      fitMobileKeyboard={fitMobileKeyboard}
       footer={
         <>
           <button onClick={onClose}>Cancel</button>

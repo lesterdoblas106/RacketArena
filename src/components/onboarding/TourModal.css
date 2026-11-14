@@ -12,11 +12,13 @@
 
 .tour-modal {
     width: min(500px, 90vw);
+    max-height: calc(100dvh - 2rem);
+    overflow-y: auto;
 
     background: white;
     border-radius: 20px;
 
-    padding: 32px;
+    padding: clamp(16px, 5vw, 32px);
 
     text-align: center;
 
@@ -64,6 +66,8 @@
 
 .tour-footer {
     display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
     justify-content: space-between;
     align-items: center;
 }
@@ -102,6 +106,8 @@
   width: 100%;
   max-width: 240px;
   height: auto;
+  max-height: 34dvh;
+  object-fit: contain;
   display: block;
   margin: 0 auto;
 }

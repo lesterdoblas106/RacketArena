@@ -6,7 +6,7 @@ type TopBarProps = {
   pageLabel: string
   showHome: boolean
   onHome: () => void
-  onInfo: () => void
+  onInfo?: () => void
 }
 
 export function TopBar({ title, pageLabel, showHome, onHome, onInfo }: TopBarProps) {
@@ -21,14 +21,16 @@ export function TopBar({ title, pageLabel, showHome, onHome, onInfo }: TopBarPro
       </div>
 
       <div className="topbar-actions">
-        <button
-          className="topbar-info-btn"
-          onClick={onInfo}
-          aria-label={`How to use ${pageLabel}`}
-          title={`How to use ${pageLabel}`}
-        >
-          <InformationCircleIcon width={16} height={16} />
-        </button>
+        {onInfo && (
+          <button
+            className="topbar-info-btn"
+            onClick={onInfo}
+            aria-label={`How to use ${pageLabel}`}
+            title={`How to use ${pageLabel}`}
+          >
+            <InformationCircleIcon width={16} height={16} />
+          </button>
+        )}
 
         {showHome && (
           <button className="topbar-home-btn" 

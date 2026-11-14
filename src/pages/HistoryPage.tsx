@@ -24,6 +24,7 @@ export function HistoryPage({
   const [playerFilter, setPlayerFilter] = useState('')
   const [editingMatchId, setEditingMatchId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Pick<MatchHistory, 'teamA' | 'teamB' | 'scoreA' | 'scoreB'> | null>(null)
+  const [shufflePlayerOrder, setShufflePlayerOrder] = useState<string[]>([])
 
   const history = useMemo(() => {
     const sortedHistory = [...session.history].sort(
@@ -65,6 +66,7 @@ export function HistoryPage({
 
   const beginEditing = (game: MatchHistory) => {
     setEditingMatchId(game.id)
+    setShufflePlayerOrder([...game.teamA, ...game.teamB])
     setDraft({
       teamA: [...game.teamA],
       teamB: [...game.teamB],
@@ -75,9 +77,27 @@ export function HistoryPage({
 
   const shuffleTeams = () => {
     if (!draft || draft.teamA.length !== 2 || draft.teamB.length !== 2) return
-    const [a, b] = draft.teamA
-    const [c, d] = draft.teamB
-    setDraft({ ...draft, teamA: [a, c], teamB: [b, d] })
+    const players = shufflePlayerOrder.length === 4
+      ? shufflePlayerOrder
+      : [...draft.teamA, ...draft.teamB]
+    if (players.length !== 4) return
+
+    const [a, b, c, d] = players
+    const arrangements = [
+      { teamA: [a, b], teamB: [c, d] },
+      { teamA: [a, c], teamB: [b, d] },
+      { teamA: [a, d], teamB: [b, c] },
+    ]
+    const pairingKey = (teamA: string[], teamB: string[]) =>
+      [teamA, teamB]
+        .map((team) => [...team].sort().join('|'))
+        .sort()
+        .join('::')
+    const currentIndex = arrangements.findIndex((arrangement) =>
+      pairingKey(arrangement.teamA, arrangement.teamB) === pairingKey(draft.teamA, draft.teamB),
+    )
+    const next = arrangements[(currentIndex + 1) % arrangements.length]
+    setDraft({ ...draft, ...next })
   }
 
   const saveMatch = (matchId: string) => {
@@ -85,6 +105,13 @@ export function HistoryPage({
     updateHistoryMatch(matchId, draft)
     setEditingMatchId(null)
     setDraft(null)
+    setShufflePlayerOrder([])
+  }
+
+  const cancelEditing = () => {
+    setEditingMatchId(null)
+    setDraft(null)
+    setShufflePlayerOrder([])
   }
 
   return (
@@ -136,7 +163,9 @@ export function HistoryPage({
               <strong>{game.courtLabel}</strong>
               <div className="history-match-meta">
                 <span>{new Date(game.endedAt).toLocaleString()}</span>
-                {!isEditing && (
+                {isEditing ? (
+                  <button className="danger small history-edit-btn" onClick={cancelEditing}>Cancel</button>
+                ) : (
                   <button className="secondary small history-edit-btn" onClick={() => beginEditing(game)} aria-label={`Edit ${game.courtLabel}`}>
                     <Pencil size={15} /> Edit
                   </button>

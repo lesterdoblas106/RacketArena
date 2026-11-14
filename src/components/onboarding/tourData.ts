@@ -4,6 +4,38 @@ export interface TourPage {
   image?: string;
 }
 
+export const quickTourPages: TourPage[] = [
+  {
+    title: 'Welcome to Racket Arena',
+    description: [
+      'Run a badminton session from attendance through match results. This quick tour covers the basics.',
+    ],
+    image: '/logo.png',
+  },
+  {
+    title: 'Create a session',
+    description: [
+      'Open the Club page and create a queue. Choose Smart Queue for balanced matchmaking or Win/Lose Stacking for a rotation based on match results.',
+    ],
+    image: '/tour/club_session.png',
+  },
+  {
+    title: 'Get players ready',
+    description: [
+      'In Attendance, use Manage to select club members and Add Visitors for guests. Mark arrivals as playing, then start the queue.',
+    ],
+    image: '/tour/attendance.png',
+  },
+  {
+    title: 'Send a match to court',
+    description: [
+      'Open Queue, add a court, and send the next matchup to it. Use End Match to record the result and return players to the rotation.',
+      'Tap the info icon at the top of any app page for more details.',
+    ],
+    image: '/tour/queue_courts.png',
+  },
+];
+
 export const tourPages: TourPage[] = [
   {
     title: "Welcome to Racket Arena",

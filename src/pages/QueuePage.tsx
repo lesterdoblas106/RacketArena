@@ -1,17 +1,18 @@
-import { useEffect,  useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Modal } from '../components/Modal'
 import type { Member, MemberStats, Session } from '../types/app'
 import { TrophyIcon, FlagIcon, TrashIcon, BoltIcon, ArrowPathRoundedSquareIcon, PaperAirplaneIcon } from '@heroicons/react/24/solid'
 import { Timer, Watch } from 'lucide-react'
 import { toast } from 'sonner'
+import { WinLoseStackView } from './WinLoseStackView'
 
 type QueuePageProps = {
   session: Session
   memberById: Record<string, Member>
-  playersSort: 'queue' | 'totalGames' | 'wins' | 'skill' | 'name'
+  playersSort: 'queue' | 'waitingTime' | 'totalGames' | 'skill' | 'name'
   manualPickIds: string[]
   onChangePlayersSort: (
-    value: 'queue' | 'totalGames' | 'wins' | 'skill' | 'name',
+    value: 'queue' | 'waitingTime' | 'totalGames' | 'skill' | 'name',
   ) => void
   onAddCourt: () => void
   onRemoveCourt: (courtId: string) => void
@@ -33,6 +34,13 @@ type QueuePageProps = {
   skillScore: (skill: Member['skill']) => number
   onShuffleRoster: (rosterId: string) => void
   buildQueueList: (session: Session) => string[]
+  onAssignStackMatchToCourt: (matchId: string | null, courtId: string, playerIds: string[]) => void
+  onPrioritizeStackMatch: (playerIds: string[]) => void
+  onSkipStackPlayer: (playerId: string) => void
+  onCreateStackManualMatch: () => void
+  onDissolveStackManualMatch: (matchId: string) => void
+  onSetStackPlayingNext: (value: 'winner' | 'loser') => void
+  onShuffleStackTeams: () => void
 }
 
 export function QueuePage({
@@ -57,7 +65,61 @@ export function QueuePage({
   skillScore,
   onShuffleRoster,
   buildQueueList,
+  onAssignStackMatchToCourt,
+  onPrioritizeStackMatch,
+  onSkipStackPlayer,
+  onCreateStackManualMatch,
+  onDissolveStackManualMatch,
+  onSetStackPlayingNext,
+  onShuffleStackTeams,
 }: QueuePageProps) {
+  const queuePanelRef = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    const panel = queuePanelRef.current
+    const grid = panel?.querySelector<HTMLElement>(':scope > .court-grid')
+    if (!panel || !grid) return
+
+    const desktop = window.matchMedia('(min-width: 761px)')
+    const scrollRosters = (event: WheelEvent) => {
+      if (!desktop.matches || event.defaultPrevented || !event.cancelable ||
+          event.ctrlKey || event.shiftKey || !event.deltaY ||
+          Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return
+
+      const maxScroll = grid.scrollWidth - grid.clientWidth
+      if (maxScroll <= 0 || (event.deltaY < 0 && grid.scrollLeft <= 0) ||
+          (event.deltaY > 0 && grid.scrollLeft >= maxScroll - 1)) return
+
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? grid.clientWidth
+        : 1
+      event.preventDefault()
+      grid.scrollLeft += event.deltaY * unit
+    }
+
+    panel.addEventListener('wheel', scrollRosters, { passive: false })
+    return () => panel.removeEventListener('wheel', scrollRosters)
+  }, [session.matchmakingMode])
+
+  if (session.matchmakingMode === 'win-lose-stack') {
+    return <WinLoseStackView
+      session={session}
+      memberById={memberById}
+      manualPickIds={manualPickIds}
+      onToggleManualPick={onToggleManualPick}
+      onCreateManualMatch={onCreateStackManualMatch}
+      onDissolveManualMatch={onDissolveStackManualMatch}
+      onAssignMatch={onAssignStackMatchToCourt}
+      onPrioritizeMatch={onPrioritizeStackMatch}
+      onSkipPlayer={onSkipStackPlayer}
+      onSetPlayingNext={onSetStackPlayingNext}
+      onShuffleTeams={onShuffleStackTeams}
+      onAddCourt={onAddCourt}
+      onRemoveCourt={onRemoveCourt}
+      onRenameCourt={onRenameCourt}
+      onEndMatch={onEndMatch}
+    />
+  }
   const [clock, setClock] = useState(() => Date.now())
   const isQueueEnded = Boolean(session.endedAt)
   const isQueueStarted = Boolean(session.startedAt)
@@ -282,11 +344,9 @@ export function QueuePage({
         )
       }
 
-      if (playersSort === 'wins') {
-        return (
-          b.stats.wins -
-          a.stats.wins
-        )
+      if (playersSort === 'waitingTime') {
+        const waitDifference = getCurrentWaitMs(b.stats) - getCurrentWaitMs(a.stats)
+        return waitDifference || memberById[a.id].name.localeCompare(memberById[b.id].name)
       }
 
       if (playersSort === 'skill') {
@@ -421,7 +481,7 @@ export function QueuePage({
                       vs
                     </div>
 
-                    <div className="court-team court-team-right">
+                    <div className="court-team ">
                       <strong>{memberById[court.teamB[0]]?.name}</strong>
                       <span>{memberById[court.teamB[1]]?.name}</span>
                     </div>
@@ -469,7 +529,7 @@ export function QueuePage({
         </div>
       </article>
 
-      <article className="card queue-panel">
+      <article ref={queuePanelRef} className="card queue-panel">
         <header className="matchmaking-header">
           <div className="matchmaking-header-info">
             <h2 className="matchmaking-title">Match Making</h2>
@@ -615,10 +675,10 @@ export function QueuePage({
               onChange={(e) => onChangePlayersSort(e.target.value as typeof playersSort)}
             >
               <option value="queue">Current Queue</option>
-              <option value="totalGames">Total Games</option>
-              <option value="wins">Wins</option>
-              <option value="skill">Skill Level</option>
+              <option value="waitingTime">Waiting Time</option>
               <option value="name">Name</option>
+              <option value="totalGames">Total Games</option>
+              <option value="skill">Skill Level</option>
             </select>
           </div>
 
@@ -844,7 +904,8 @@ export function QueuePage({
                 <input
                   type="number"
                   min={0}
-                  value={resultModal.scoreA}
+                  value={resultModal.scoreA === 0 ? '' : resultModal.scoreA}
+                  placeholder="0"
                   onChange={(event) =>
                     setResultModal((prev) =>
                       prev
@@ -912,7 +973,8 @@ export function QueuePage({
                 <input
                   type="number"
                   min={0}
-                  value={resultModal.scoreB}
+                  value={resultModal.scoreB === 0 ? '' : resultModal.scoreB}
+                  placeholder="0"
                   onChange={(event) =>
                     setResultModal((prev) =>
                       prev
@@ -994,7 +1056,7 @@ export function QueuePage({
               disabled={isQueueEnded}
               onClick={onQueueManualRoster}
             >
-              Create Match
+              Create Manual Match
             </button>
           )}
         </div>

@@ -1,3 +1,4 @@
+import { createId } from '../lib/createId'
 import { useEffect, useMemo, useState } from 'react'
 import { loadState, saveState } from '../lib/storage'
 import {
@@ -7,14 +8,42 @@ import {
   type MatchHistory,
   type Member,
   type MemberStats,
+  type MatchmakingMode,
   type Session,
   type SessionHistory,
   type Skill,
+  type WinLoseStackState,
 } from '../types/app'
 import { toast } from 'sonner'
+import { appendResultToStacks, buildStackRotation, buildUpcomingStackMatches, lockReturningMatches, removePlayersFromStacks, restorePlayersToStacks, skipNextStackPlayer } from '../lib/stacking'
+
+const compatibilityLayers = [
+  { maxGameGap: 0, maxSkillGap: 1 },
+  { maxGameGap: 0, maxSkillGap: 2 },
+  { maxGameGap: 1, maxSkillGap: 2 },
+  { maxGameGap: 1, maxSkillGap: 3 },
+  { maxGameGap: 1, maxSkillGap: 4 },
+  { maxGameGap: 2, maxSkillGap: 5 },
+] as const
 
 const capitalizeName = (name: string) =>
   name ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : name
+
+const removeCalibrationPlayer = (
+  stack: WinLoseStackState,
+  memberId: string,
+  stats: Session['stats'],
+): WinLoseStackState => {
+  const initialPlayerIds = stack.initialPlayerIds.filter((id) => id !== memberId)
+  return {
+    ...stack,
+    initialPlayerIds,
+    calibrationComplete:
+      stack.calibrationComplete ||
+      initialPlayerIds.length === 0 ||
+      initialPlayerIds.every((id) => (stats[id]?.gamesPlayed ?? 0) > 0),
+  }
+}
 
 export function useRacketArenaState() {
   const [initial] = useState(() => {
@@ -22,8 +51,9 @@ export function useRacketArenaState() {
     if (persisted) {
       return {
         ...persisted,
-        sessions: persisted.sessions.map((session) => ({
-          ...session,
+        sessions: persisted.sessions.map((session) => {
+          const migrated = {
+            ...session,
           startedAt: Object.prototype.hasOwnProperty.call(session, 'startedAt')
             ? session.startedAt
             : new Date(session.createdAt).getTime(),
@@ -33,6 +63,22 @@ export function useRacketArenaState() {
           // become participants during the migration.
           participantIds: session.participantIds ?? session.playingIds ?? [],
           visitors: session.visitors ?? [],
+          matchmakingMode: session.matchmakingMode ?? 'smart-queue',
+          winLoseStack: {
+            unplayed: session.winLoseStack?.unplayed ?? [],
+            winners: session.winLoseStack?.winners ?? [],
+            losers: session.winLoseStack?.losers ?? [],
+            returning: session.winLoseStack?.returning ?? [],
+            returningMatches: session.winLoseStack?.returningMatches ?? [],
+            prioritizedPlayerIds: session.winLoseStack?.prioritizedPlayerIds,
+            playingNext: session.winLoseStack?.playingNext ?? 'winner',
+            initialPlayerIds: session.winLoseStack?.initialPlayerIds ?? [],
+            // Existing started sessions predate calibration tracking, so retain
+            // their established rotation behavior rather than exempting them.
+            calibrationComplete: session.winLoseStack?.calibrationComplete ?? Boolean(session.startedAt),
+            manualMatches: session.winLoseStack?.manualMatches ?? [],
+            teamRotation: session.winLoseStack?.teamRotation ?? 0,
+          },
           history: session.history ?? [],
           stats: Object.fromEntries(
             Object.entries(session.stats).map(([memberId, stats]) => [
@@ -47,7 +93,9 @@ export function useRacketArenaState() {
             name: court.name ?? `Court ${courtIndex + 1}`,
             startedAt: court.startedAt ?? null,
           })),
-        })),
+          }
+          return migrated
+        }),
       }
     }
     return {
@@ -68,7 +116,7 @@ export function useRacketArenaState() {
     'arrival' | 'games' | 'wins' | 'skill' | 'name' | 'queue'
   >('arrival')
   const [playersSort, setPlayersSort] = useState<
-    'queue' | 'totalGames' | 'wins' | 'skill' | 'name'
+    'queue' | 'waitingTime' | 'totalGames' | 'skill' | 'name'
   >('queue')
   const [manualPickIds, setManualPickIds] = useState<string[]>([])
   const [clock, setClock] = useState(() => Date.now())
@@ -150,26 +198,87 @@ export function useRacketArenaState() {
     )
   }
 
-  const createQueue = (queue: { name: string, createdAt: string }) => {
+  const createQueue = (queue: { name: string, createdAt: string, matchmakingMode?: MatchmakingMode }) => {
     if (!queue.name.trim()) return
     setSessions((prev) => [
       { 
-        ...createSession(queue.name.trim(), members), 
-        createdAt: queue.createdAt 
+        ...createSession(queue.name.trim(), members),
+        createdAt: queue.createdAt,
+        matchmakingMode: queue.matchmakingMode ?? 'smart-queue',
       },
       ...prev
     ])
   }
 
-  const editQueue = (queueId: string, name: string) => {
+  const editQueue = (queueId: string, name: string, matchmakingMode: MatchmakingMode) => {
     const target = sessions.find((s) => s.id === queueId)
-    if (!target) return
+    if (!target || !name.trim()) return
+    if (target.endedAt != null) {
+      toast.warning('This session has ended and can’t be edited.')
+      return
+    }
+    if (target.startedAt != null && target.matchmakingMode !== matchmakingMode) {
+      toast.warning('Matchmaking mode can’t be changed after the queue starts.')
+      return
+    }
+
+    if (queueId === activeSessionId && target.matchmakingMode !== matchmakingMode) {
+      setManualPickIds([])
+    }
+
+    setSessions((prev) => prev.map((session) => {
+      if (session.id !== queueId || session.endedAt != null) return session
+      if (session.matchmakingMode === matchmakingMode) {
+        return { ...session, name: name.trim() }
+      }
+      if (session.startedAt != null) return session
+
+      const inGame = new Set(session.courts.flatMap((court) => [...court.teamA, ...court.teamB]))
+      return {
+        ...session,
+        name: name.trim(),
+        matchmakingMode,
+        rosters: [],
+        winLoseStack: {
+          unplayed: matchmakingMode === 'win-lose-stack'
+            ? session.playingIds.filter((id) => !inGame.has(id))
+            : [],
+          winners: [],
+          losers: [],
+          playingNext: 'winner',
+          initialPlayerIds: [],
+          calibrationComplete: false,
+          manualMatches: [],
+          teamRotation: 0,
+        },
+      }
+    }))
+  }
+
+  const editActiveSessionDetails = (name: string, matchmakingMode: MatchmakingMode) => {
     if (!name.trim()) return
-    setSessions((prev) =>
-      prev.map((session) =>
-        session.id === queueId ? { ...session, name: name.trim() } : session,
-      ),
-    )
+    updateActiveSession((session) => {
+      if (session.startedAt) return session
+
+      const changedToStack = matchmakingMode === 'win-lose-stack' && session.matchmakingMode !== 'win-lose-stack'
+      const knownStackPlayers = new Set([
+        ...session.winLoseStack.unplayed,
+        ...session.winLoseStack.winners,
+        ...session.winLoseStack.losers,
+        ...(session.winLoseStack.returning ?? []),
+      ])
+      return {
+        ...session,
+        name: name.trim(),
+        matchmakingMode,
+        winLoseStack: changedToStack
+          ? {
+              ...session.winLoseStack,
+              unplayed: [...session.winLoseStack.unplayed, ...session.playingIds.filter((id) => !knownStackPlayers.has(id))],
+            }
+          : session.winLoseStack,
+      }
+    })
   }
 
   const deleteQueue = (queueId: string) => {
@@ -181,7 +290,7 @@ export function useRacketArenaState() {
 
   const addMember = (name: string, skill: Skill) => {
     if (!name.trim() || !skillOrder.includes(skill)) return
-    const newMember = { id: crypto.randomUUID(), name: capitalizeName(name.trim()), skill }
+    const newMember = { id: createId(), name: capitalizeName(name.trim()), skill }
     setMembers((prev) => [...prev, newMember])
     upsertStatsForNewMember(newMember.id)
   }
@@ -214,7 +323,7 @@ export function useRacketArenaState() {
     if (!cleanedMembers.length) return
 
     const newMembers = cleanedMembers.map((member) => ({
-      id: crypto.randomUUID(),
+      id: createId(),
       name: member.name,
       skill: member.skill,
     }))
@@ -240,6 +349,7 @@ export function useRacketArenaState() {
         nonPlayingIds: session.nonPlayingIds.filter((id) => id !== memberId),
         participantIds: (session.participantIds ?? []).filter((id) => id !== memberId),
         playingIds: session.playingIds.filter((id) => id !== memberId),
+        winLoseStack: removePlayersFromStacks(session.winLoseStack, [memberId]),
         rosters: session.rosters
           .map((r) => ({ ...r, playerIds: r.playerIds.filter((id) => id !== memberId) }))
           .filter((r) => r.playerIds.length === 4),
@@ -261,10 +371,14 @@ export function useRacketArenaState() {
 
   const addVisitors = (names: string[], defaultSkill: Skill = 'Intermediate') => {
     if (!activeSessionId || !skillOrder.includes(defaultSkill)) return
+    const isWinLoseStack = activeSession?.matchmakingMode === 'win-lose-stack'
 
     const cleanedVisitors = names
       .map((line) => {
         const trimmedLine = line.trim()
+        if (isWinLoseStack) {
+          return { name: capitalizeName(trimmedLine), skill: defaultSkill }
+        }
         const match = trimmedLine.match(/^(.*?)(?:\s+([1-7]))?$/)
         const name = (match?.[1] ?? trimmedLine).trim()
         const skillNumber = match?.[2] ? Number(match[2]) : null
@@ -286,7 +400,7 @@ export function useRacketArenaState() {
 
       const newVisitors = uniqueVisitors.map((visitor) => ({
         ...visitor,
-        id: crypto.randomUUID(),
+        id: createId(),
       }))
       const now = Date.now()
       const stats = { ...session.stats }
@@ -338,6 +452,7 @@ export function useRacketArenaState() {
         playingIds: session.playingIds.filter((id) => id !== visitorId),
         priorityList: session.priorityList.filter((id) => id !== visitorId),
         playerList: session.playerList.filter((id) => id !== visitorId),
+        winLoseStack: removePlayersFromStacks(session.winLoseStack, [visitorId]),
         rosters: updatedRosters,
         courts: session.courts.map((court) => ({
           ...court,
@@ -382,16 +497,18 @@ export function useRacketArenaState() {
           lowestTotalGames - playerTotalGames,
         )
 
+        const arrivedAt = Date.now()
         const updatedStats = {
           ...memberStats,
           missedGames,
-          waitingSince: session.startedAt ? Date.now() : memberStats.waitingSince,
-          joinedAtTime: session.startedAt
-            ? memberStats.joinedAtTime ?? Date.now()
-            : memberStats.joinedAtTime,
+          // Arrival is always recorded. The waiting clock starts at the session
+          // start for early arrivals, or at arrival for players joining later.
+          waitingSince: session.startedAt ? arrivedAt : memberStats.waitingSince,
+          joinedAtTime: memberStats.joinedAtTime ?? arrivedAt,
         }
 
         const shouldPrioritize = missedGames > 0
+        const isReturning = memberStats.gamesPlayed > 0
 
         return {
           ...session,
@@ -414,6 +531,25 @@ export function useRacketArenaState() {
             ...session.stats,
             [memberId]: updatedStats,
           },
+          winLoseStack:
+            session.matchmakingMode === 'win-lose-stack'
+              ? lockReturningMatches({
+                  ...session.winLoseStack,
+                  initialPlayerIds:
+                    !isReturning && session.startedAt && !session.winLoseStack.calibrationComplete &&
+                    !session.winLoseStack.initialPlayerIds.includes(memberId)
+                      ? [...session.winLoseStack.initialPlayerIds, memberId]
+                      : session.winLoseStack.initialPlayerIds,
+                  unplayed: isReturning || session.winLoseStack.unplayed.includes(memberId) ||
+                    session.winLoseStack.winners.includes(memberId) ||
+                    session.winLoseStack.losers.includes(memberId)
+                    ? session.winLoseStack.unplayed
+                    : [...session.winLoseStack.unplayed, memberId],
+                  returning: isReturning && !session.winLoseStack.returning?.includes(memberId)
+                    ? [...(session.winLoseStack.returning ?? []), memberId]
+                    : session.winLoseStack.returning,
+                }, session.courts)
+              : session.winLoseStack,
         }
       }),
     )
@@ -469,6 +605,14 @@ export function useRacketArenaState() {
               waitingSince: Date.now(),
             },
           },
+          winLoseStack:
+            session.matchmakingMode === 'win-lose-stack'
+              ? removeCalibrationPlayer(
+                  removePlayersFromStacks(session.winLoseStack, [memberId]),
+                  memberId,
+                  session.stats,
+                )
+              : session.winLoseStack,
         }
       }),
     )
@@ -505,6 +649,14 @@ export function useRacketArenaState() {
               waitingSince: Date.now(),
             },
           },
+          winLoseStack:
+            session.matchmakingMode === 'win-lose-stack'
+              ? removeCalibrationPlayer(
+                  removePlayersFromStacks(session.winLoseStack, [memberId]),
+                  memberId,
+                  session.stats,
+                )
+              : session.winLoseStack,
         }
       }),
     )
@@ -518,126 +670,18 @@ export function useRacketArenaState() {
     session: Session,
     basePlayerId: string,
     comparedPlayerId: string,
-    widenLevel: number,
+    layer: (typeof compatibilityLayers)[number],
+    inGamePlayers?: ReadonlySet<string>,
   ) => {
-    const baseStats = session.stats[basePlayerId]
+    const baseTotalGames =
+      getTotalGames(session.stats[basePlayerId]) + (inGamePlayers?.has(basePlayerId) ? 1 : 0)
+    const comparedTotalGames =
+      getTotalGames(session.stats[comparedPlayerId]) + (inGamePlayers?.has(comparedPlayerId) ? 1 : 0)
 
-    const comparedStats = session.stats[comparedPlayerId]
+    const gameGap = Math.abs(baseTotalGames - comparedTotalGames)
+    const skillGap = Math.abs(getSkillLevel(basePlayerId) - getSkillLevel(comparedPlayerId))
 
-    const baseTotalGames = getTotalGames(baseStats)
-
-    const comparedTotalGames = getTotalGames(comparedStats)
-
-    const totalGamesDiff = Math.abs(
-      baseTotalGames -
-        comparedTotalGames,
-    )
-
-    const maxGamesDiff = widenLevel >= 4 ? 2 : 1
-
-    if (totalGamesDiff > maxGamesDiff) {
-      // console.log(
-      //   memberById[basePlayerId].name,
-      //   "vs",
-      //   memberById[comparedPlayerId].name,
-      //   "Rejected: totalGamesDiff"
-      // )
-      return false
-    }
-
-    const baseSkill = getSkillLevel(basePlayerId)
-
-    const comparedSkill = getSkillLevel(comparedPlayerId)
-
-    const activeSkills =
-      session.playingIds.map(
-        (playerId) =>
-          getSkillLevel(playerId),
-      )
-
-    const sessionMinSkill =
-      Math.min(...activeSkills)
-
-    const sessionMaxSkill =
-      Math.max(...activeSkills)
-
-    if (getTotalGames(baseStats)=== 0) {
-      const allowedSkillDiff =
-          widenLevel >= 4
-              ? sessionMaxSkill - sessionMinSkill
-              : widenLevel + 1
-
-      return (
-          Math.abs(baseSkill - comparedSkill) <= allowedSkillDiff
-      )
-    }
-
-    let minSkill =
-      baseSkill - 1
-
-    let maxSkill =
-      baseSkill + 1
-
-    const isLowestSkillInSession =
-      baseSkill === sessionMinSkill
-
-    const isHighestSkillInSession =
-      baseSkill === sessionMaxSkill
-      
-    if (isLowestSkillInSession) {
-      minSkill = baseSkill
-      maxSkill = baseSkill + 2
-    }
-
-    if (isHighestSkillInSession) {
-      minSkill = baseSkill - 2
-      maxSkill = baseSkill
-    }
-
-    if (widenLevel >= 1) {
-      minSkill -= 1
-      maxSkill += 1
-    }
-    if (widenLevel >= 4) {
-      minSkill = sessionMinSkill
-      maxSkill = sessionMaxSkill
-    }
-  
-    minSkill =
-      Math.max(
-        sessionMinSkill,
-        minSkill,
-      )
-
-    maxSkill =
-      Math.min(
-        sessionMaxSkill,
-        maxSkill,
-      )
-
-
-    const withinSkillRange =
-      comparedSkill >= minSkill &&
-      comparedSkill <= maxSkill
-
-    if (!withinSkillRange) {
-      return false
-    }
-
-    const isEven =
-      baseTotalGames % 2 === 0
-
-    if (widenLevel < 3) {
-      if (isEven && comparedSkill < baseSkill) {
-        return false
-      }
-
-      if (!isEven && comparedSkill > baseSkill) {
-        return false
-      }
-    }
-
-    return true
+    return gameGap <= layer.maxGameGap && skillGap <= layer.maxSkillGap
   }
   const getTeammateCount = (
     session: Session,
@@ -920,17 +964,63 @@ const buildMatchSet = (
   queueList: string[],
   preferredBasePlayerId?: string,
 ) => {
-  
-  if (queueList.length < 4) {
-    return []
-  }
-
   const queuedPlayers = new Set(
     session.rosters.flatMap(
       (roster) => roster.playerIds,
     ),
   )
-  
+  const inGamePlayers = new Set(
+    session.courts.flatMap((court) => [...court.teamA, ...court.teamB]),
+  )
+  const activeCourts = session.courts
+    .filter((court) => court.teamA.length > 0 && court.startedAt !== null)
+    .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
+
+  const waitingPlayers = new Set(session.playingIds.filter(
+    (id) => !queuedPlayers.has(id) && !inGamePlayers.has(id),
+  ))
+  if (waitingPlayers.size === 3) {
+    const eligiblePlayers = new Set(waitingPlayers)
+    for (const court of activeCourts) {
+      for (const id of [...court.teamA, ...court.teamB]) {
+        if (!queuedPlayers.has(id)) eligiblePlayers.add(id)
+      }
+      const candidates = [...new Set([...queueList, ...eligiblePlayers])]
+        .filter((id) => eligiblePlayers.has(id))
+      const roster = findCompatibleRoster(
+        session, candidates, preferredBasePlayerId, queuedPlayers, inGamePlayers, new Set(), true,
+      )
+      if (roster.length === 4) return roster
+    }
+    return []
+  }
+
+  const n = session.rosters.length - activeCourts.length + 1
+  const eligibleCourtCount = n <= 0 || activeCourts.length === 0
+    ? 0
+    : Math.min(
+        activeCourts.length,
+        Math.max(1, Math.round(n / activeCourts.length)),
+      )
+  const blockedInGamePlayers = new Set(
+    activeCourts.slice(eligibleCourtCount).flatMap((court) => [...court.teamA, ...court.teamB]),
+  )
+  return findCompatibleRoster(
+    session, queueList, preferredBasePlayerId, queuedPlayers, inGamePlayers, blockedInGamePlayers,
+  )
+}
+
+const findCompatibleRoster = (
+  session: Session,
+  queueList: string[],
+  preferredBasePlayerId: string | undefined,
+  queuedPlayers: ReadonlySet<string>,
+  inGamePlayers: Set<string>,
+  blockedInGamePlayers: ReadonlySet<string>,
+  expandedPool = false,
+) => {
+  if (queueList.length < 4) return []
+
   const baseIndexes = queueList
     .map((_, index) => index)
     .sort((a, b) => {
@@ -948,12 +1038,6 @@ const buildMatchSet = (
 
       return a - b
     })
-  const inGamePlayers = new Set(
-    session.courts.flatMap((court) => [
-      ...court.teamA,
-      ...court.teamB,
-    ]),
-  )
   const getEffectiveGames = (
     session: Session,
     memberId: string,
@@ -965,31 +1049,6 @@ const buildMatchSet = (
       (inGamePlayers.has(memberId) ? 1 : 0)
     )
   }
-  const activeCourts = session.courts
-    .filter(
-      (court) =>
-        court.teamA.length > 0 &&
-        court.startedAt !== null,
-    )
-    .sort(
-      (a, b) =>
-        (a.startedAt ?? 0) -
-        (b.startedAt ?? 0),
-    )
-
-  const eligibleCourtCount = Math.max(
-    1,
-    Math.round(activeCourts.length / 3),
-  )
-
-  const blockedInGamePlayers = new Set(
-    activeCourts
-      .slice(eligibleCourtCount)
-      .flatMap((court) => [
-        ...court.teamA,
-        ...court.teamB,
-      ]),
-  )
     // console.log(
     //   "Queue List:",
     //   queueList.map(id => ({
@@ -1014,12 +1073,12 @@ const buildMatchSet = (
     const startIndex = baseTotalGames  === 2 ? baseIndex + 2 : baseIndex + 1
     
     const comparedStartIndex =
-      basePlayer === preferredBasePlayerId ? 0 : startIndex
+      expandedPool || basePlayer === preferredBasePlayerId ? 0 : startIndex
     
     let bestRoster: string[] = []
     let lowestScore = Infinity
     let bestGameGap = Infinity  
-    for ( let widenLevel = 0; widenLevel <= 4; widenLevel++) {
+    for (const layer of compatibilityLayers) {
     // const waitSetArr = [basePlayer]
       const compatiblePlayers: string[] = []
 
@@ -1045,7 +1104,8 @@ const buildMatchSet = (
             session,
             basePlayer,
             comparedPlayer,
-            widenLevel,
+            layer,
+            expandedPool ? inGamePlayers : undefined,
           )
 
         if (compatible) {
@@ -1054,7 +1114,7 @@ const buildMatchSet = (
       }
       // console.log({
       //   basePlayer: memberById[basePlayer]?.name,
-      //   widenLevel,
+      //   layer,
       //   compatiblePlayers: compatiblePlayers.map(
       //     id => memberById[id]?.name
       //   ),
@@ -1458,7 +1518,7 @@ const buildMatchSet = (
           rosters: [
             ...session.rosters,
             {
-              id: crypto.randomUUID(),
+              id: createId(),
               playerIds: selectedMatch,
               baseOrder: selectedMatch,
               rotationIndex: 0,
@@ -1489,7 +1549,7 @@ const buildMatchSet = (
         rosters: [
           ...session.rosters,
           {
-            id: crypto.randomUUID(),
+            id: createId(),
             playerIds: selectedPlayers,
             baseOrder: selectedPlayers, 
             rotationIndex: 0,
@@ -1560,7 +1620,7 @@ const buildMatchSet = (
         rosters: [
           ...session.rosters,
           {
-            id: crypto.randomUUID(),
+            id: createId(),
             playerIds: manualPickIds,
             baseOrder: manualPickIds,
             rotationIndex: 0,
@@ -1624,7 +1684,7 @@ const buildMatchSet = (
       courts: [
         ...session.courts,
         {
-          id: crypto.randomUUID(),
+          id: createId(),
           name: `Court ${session.courts.length + 1}`,
           teamA: [],
           teamB: [],
@@ -1701,6 +1761,148 @@ const buildMatchSet = (
       }
     })
 
+  const setStackPlayingNext = (playingNext: 'winner' | 'loser') =>
+    updateActiveSession((session) =>
+      session.matchmakingMode === 'win-lose-stack'
+        ? { ...session, winLoseStack: { ...session.winLoseStack, playingNext } }
+        : session,
+    )
+
+  const shuffleStackTeams = () =>
+    updateActiveSession((session) =>
+      session.matchmakingMode === 'win-lose-stack'
+        ? {
+            ...session,
+            winLoseStack: {
+              ...session.winLoseStack,
+              teamRotation: ((session.winLoseStack.teamRotation ?? 0) + 1) % 3,
+            },
+          }
+        : session,
+    )
+
+  const createStackManualMatch = () => {
+    if (manualPickIds.length !== 4) return
+    updateActiveSession((session) => {
+      if (session.matchmakingMode !== 'win-lose-stack' || session.endedAt) return session
+      const eligible = new Set([
+        ...session.winLoseStack.unplayed,
+        ...session.winLoseStack.winners,
+        ...session.winLoseStack.losers,
+        ...(session.winLoseStack.returning ?? []),
+      ])
+      if (manualPickIds.some((id) => !eligible.has(id))) return session
+      const playerSources = Object.fromEntries(manualPickIds.map((id) => [
+        id,
+        session.winLoseStack.unplayed.includes(id)
+          ? 'unplayed'
+          : session.winLoseStack.winners.includes(id)
+            ? 'winner'
+            : session.winLoseStack.losers.includes(id)
+              ? 'loser'
+              : 'returning',
+      ] as const))
+      const stack = removePlayersFromStacks(session.winLoseStack, manualPickIds)
+      return {
+        ...session,
+        winLoseStack: {
+          ...stack,
+          manualMatches: [...stack.manualMatches, {
+            id: createId(),
+            playerIds: [...manualPickIds],
+            playerSources,
+            createdAt: new Date().toISOString(),
+          }],
+        },
+      }
+    })
+    setManualPickIds([])
+  }
+
+  const dissolveStackManualMatch = (matchId: string) =>
+    updateActiveSession((session) => {
+      const match = session.winLoseStack.manualMatches.find((item) => item.id === matchId)
+      if (!match) return session
+      const stack = { ...session.winLoseStack, manualMatches: session.winLoseStack.manualMatches.filter((item) => item.id !== matchId) }
+      return { ...session, winLoseStack: restorePlayersToStacks(stack, match.playerSources) }
+    })
+
+  const skipStackPlayer = (playerId: string) =>
+    updateActiveSession((session) => {
+      if (session.matchmakingMode !== 'win-lose-stack' || session.endedAt) return session
+      const stack = skipNextStackPlayer(session.winLoseStack, playerId, session.courts)
+      if (!stack) {
+        toast.warning('No replacement is available from the same stack.')
+        return session
+      }
+      return { ...session, winLoseStack: stack }
+    })
+
+  const prioritizeStackMatch = (playerIds: string[]) =>
+    updateActiveSession((session) => {
+      if (session.matchmakingMode !== 'win-lose-stack' || session.endedAt) return session
+      const match = buildUpcomingStackMatches(session.winLoseStack, session.courts).find((item) =>
+        item.complete && item.playerIds.length === playerIds.length &&
+        playerIds.every((id) => item.playerIds.includes(id)),
+      )
+      if (!match) return session
+      return {
+        ...session,
+        winLoseStack: { ...session.winLoseStack, prioritizedPlayerIds: [...match.playerIds] },
+      }
+    })
+
+  const assignStackMatchToCourt = (matchId: string | null, courtId: string, playerIds: string[]) =>
+    updateActiveSession((session) => {
+      if (session.matchmakingMode !== 'win-lose-stack' || session.endedAt || !session.startedAt) return session
+      const court = courtId
+        ? session.courts.find((item) => item.id === courtId && !item.teamA.length && !item.teamB.length)
+        : session.courts.find((item) => !item.teamA.length && !item.teamB.length)
+      if (!court) return session
+      const manualMatch = matchId ? session.winLoseStack.manualMatches.find((item) => item.id === matchId) : null
+      const next = buildUpcomingStackMatches(session.winLoseStack, session.courts)[0]
+      if (!next?.complete || (next.id ?? null) !== matchId ||
+          playerIds.some((id, index) => next.playerIds[index] !== id)) {
+        toast.warning('The next match changed. Please select a court again.')
+        return session
+      }
+      const automatic = !matchId && next?.complete && !next.manual ? next : null
+      const match = manualMatch ?? automatic
+      if (!match || match.playerIds.length !== 4) return session
+      const stack = manualMatch
+        ? { ...session.winLoseStack, manualMatches: session.winLoseStack.manualMatches.filter((item) => item.id !== manualMatch.id) }
+        : { ...removePlayersFromStacks(session.winLoseStack, match.playerIds), playingNext: automatic!.playingNextAfter }
+      const dispatchedIndex = manualMatch ? -1 : buildStackRotation(session.winLoseStack)
+        .findIndex((item) => item.playerIds[0] === match.playerIds[0])
+      const [first, second, third, fourth] = match.playerIds
+      const teams = [
+        [[first, third], [second, fourth]],
+        [[first, second], [third, fourth]],
+        [[first, fourth], [second, third]],
+      ][session.winLoseStack.teamRotation ?? 0]
+      return {
+        ...session,
+        winLoseStack: {
+          ...stack,
+          prioritizedPlayerIds: undefined,
+          returningMatches: stack.returningMatches?.map((item) =>
+            dispatchedIndex >= 0 && item.index > dispatchedIndex
+              ? { ...item, index: item.index - 1 }
+              : item,
+          ),
+        },
+        courts: session.courts.map((item) => item.id === court.id ? {
+          ...item,
+          teamA: teams[0],
+          teamB: teams[1],
+          scoreA: 0,
+          scoreB: 0,
+          startedAt: Date.now(),
+          stackPlayerSources: match.playerSources,
+        } : item),
+      }
+    })
+
   const updateCourtScore = (courtId: string, team: 'A' | 'B', value: number) =>
     updateActiveSession((session) => ({
       ...session,
@@ -1729,6 +1931,10 @@ const buildMatchSet = (
       return {
         ...session,
         stats: updatedStats,
+        winLoseStack:
+          session.matchmakingMode === 'win-lose-stack' && target.stackPlayerSources
+            ? restorePlayersToStacks(session.winLoseStack, target.stackPlayerSources)
+            : session.winLoseStack,
         courts: session.courts.map((court) =>
           court.id === courtId
             ? {
@@ -1921,15 +2127,45 @@ const buildMatchSet = (
         
       ]
 
+      const stackBeforeResult = session.matchmakingMode === 'win-lose-stack'
+        ? lockReturningMatches(session.winLoseStack, session.courts)
+        : session.winLoseStack
+      const nextWinLoseStack =
+        session.matchmakingMode === 'win-lose-stack'
+          ? matchResult === 'draw'
+            ? restorePlayersToStacks(stackBeforeResult, target.stackPlayerSources ?? {})
+            : appendResultToStacks(
+                stackBeforeResult,
+                winnerIds,
+                matchPlayerIds.filter((id) => !winnerIds.includes(id)),
+              )
+          : session.winLoseStack
+      const calibrationComplete =
+        nextWinLoseStack.calibrationComplete ||
+        nextWinLoseStack.initialPlayerIds.length === 0 ||
+        nextWinLoseStack.initialPlayerIds.every(
+          (memberId) => (updatedStats[memberId]?.gamesPlayed ?? 0) > 0,
+        )
+
       return {
         
         ...session,
         stats: updatedStats,
-        priorityList: updatedPriorityList,
-        playerList: updatedPlayerList,
+        priorityList:
+          session.matchmakingMode === 'win-lose-stack'
+            ? session.priorityList
+            : updatedPriorityList,
+        playerList:
+          session.matchmakingMode === 'win-lose-stack'
+            ? session.playerList
+            : updatedPlayerList,
+        winLoseStack:
+          session.matchmakingMode === 'win-lose-stack'
+            ? { ...nextWinLoseStack, calibrationComplete }
+            : nextWinLoseStack,
         history: [
           {
-            id: crypto.randomUUID(),
+            id: createId(),
             courtLabel:
               target.name ??
               `Court ${session.courts.findIndex((c) => c.id === courtId) + 1}`,
@@ -1953,7 +2189,8 @@ const buildMatchSet = (
                 teamB: [],
                 scoreA: 0,
                 scoreB: 0,
-                startedAt: null,
+              startedAt: null,
+              stackPlayerSources: undefined,
               }
             : court,
         ),
@@ -2117,7 +2354,7 @@ const buildSessionHistorySnapshot = (
     session.history[0]
 
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
 
     title:
       session.name,
@@ -2454,7 +2691,7 @@ const startSession = () =>
     for (const memberId of session.playingIds) {
       updatedStats[memberId] = {
         ...updatedStats[memberId],
-        joinedAtTime: startedAt,
+        joinedAtTime: updatedStats[memberId].joinedAtTime ?? startedAt,
         waitingSince: startedAt,
       }
     }
@@ -2463,6 +2700,30 @@ const startSession = () =>
       ...session,
       startedAt,
       stats: updatedStats,
+      winLoseStack:
+        session.matchmakingMode === 'win-lose-stack'
+          ? (() => {
+              const reservedPlayerIds = new Set(
+                session.winLoseStack.manualMatches.flatMap((match) => match.playerIds),
+              )
+              const knownPlayerIds = new Set([
+                ...session.winLoseStack.unplayed,
+                ...session.winLoseStack.winners,
+                ...session.winLoseStack.losers,
+                ...(session.winLoseStack.returning ?? []),
+                ...reservedPlayerIds,
+              ])
+              return {
+                ...session.winLoseStack,
+                initialPlayerIds: [...session.playingIds],
+                calibrationComplete: session.playingIds.length === 0,
+                unplayed: [
+                  ...session.winLoseStack.unplayed,
+                  ...session.playingIds.filter((id) => !knownPlayerIds.has(id)),
+                ],
+              }
+            })()
+          : session.winLoseStack,
     }
   })
 
@@ -2484,6 +2745,7 @@ const startSession = () =>
     openSession,
     createQueue,
     editQueue,
+    editActiveSessionDetails,
     deleteQueue,
     addMember,
     addMembersBulk,
@@ -2504,13 +2766,20 @@ const startSession = () =>
     generateRoster,
     forfeitMatch,
     queueManualRoster,
+    createStackManualMatch,
+    dissolveStackManualMatch,
     assignToCourt,
+    assignStackMatchToCourt,
+    prioritizeStackMatch,
+    skipStackPlayer,
     dissolveRoster,
     replaceRosterPlayer,
     getSessionPlayerStatus,
     skillScore,
     shuffleRoster,
     buildQueueList,
+    setStackPlayingNext,
+    shuffleStackTeams,
     exportSessionCSV,
     shareSessionCSV,
     startSession,

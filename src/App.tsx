@@ -14,6 +14,9 @@ import { RankingPage } from './pages/RankingPage'
 import type { Skill } from './types/app'
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom'
 import TourModal from "./components/onboarding/TourModal";
+import { quickTourPages } from './components/onboarding/tourData'
+
+const TOURS_ENABLED = false
 
 function App() {
   const {
@@ -31,6 +34,7 @@ function App() {
     openSession,
     createQueue,
     editQueue,
+    editActiveSessionDetails,
     deleteQueue,
     addMember,
     addMembersBulk,
@@ -49,7 +53,12 @@ function App() {
     endMatch,
     generateRoster,
     queueManualRoster,
+    createStackManualMatch,
+    dissolveStackManualMatch,
     assignToCourt,
+    assignStackMatchToCourt,
+    prioritizeStackMatch,
+    skipStackPlayer,
     dissolveRoster,
     replaceRosterPlayer,
     getSessionPlayerStatus,
@@ -58,6 +67,8 @@ function App() {
     shuffleRoster,
     buildQueueList,
     forfeitMatch,
+    setStackPlayingNext,
+    shuffleStackTeams,
     exportSessionCSV,
     startSession,
     endSession,
@@ -67,6 +78,14 @@ function App() {
   )
   const [rankingSkillFilter, setRankingSkillFilter] = useState<Skill | 'all'>('all')
   const [helpOpen, setHelpOpen] = useState(false)
+  const [showFirstRunTour, setShowFirstRunTour] = useState(() => {
+    if (!TOURS_ENABLED) return false
+    try {
+      return localStorage.getItem('tourCompleted') !== 'true'
+    } catch {
+      return true
+    }
+  })
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -119,6 +138,15 @@ function App() {
     navigate(`/${page}`)
   }
 
+  const dismissFirstRunTour = () => {
+    setShowFirstRunTour(false)
+    try {
+      localStorage.setItem('tourCompleted', 'true')
+    } catch {
+      // The tour can still be dismissed for this visit without storage.
+    }
+  }
+
   return (
     <>
       {currentPage !== 'landing' && (
@@ -127,7 +155,7 @@ function App() {
           pageLabel={topBarPageLabel}
           showHome={showHome}
           onHome={() => navigate('/club')}
-          onInfo={() => setHelpOpen(true)}
+          onInfo={TOURS_ENABLED ? () => setHelpOpen(true) : undefined}
         />
       )}
 
@@ -173,6 +201,7 @@ function App() {
                     onDeleteVisitor={deleteVisitor}
                     onStartQueue={startSession}
                     onEndQueue={endSession}
+                    onEditSessionDetails={editActiveSessionDetails}
                   />
                 ) : (
                   <Navigate to="/club" />
@@ -195,8 +224,13 @@ function App() {
                     onEndMatch={endMatch}
                     onGenerateRoster={generateRoster}
                     onQueueManualRoster={queueManualRoster}
+                    onCreateStackManualMatch={createStackManualMatch}
                     onAssignToCourt={assignToCourt}
+                    onAssignStackMatchToCourt={assignStackMatchToCourt}
+                    onPrioritizeStackMatch={prioritizeStackMatch}
+                    onSkipStackPlayer={skipStackPlayer}
                     onDissolveRoster={dissolveRoster}
+                    onDissolveStackManualMatch={dissolveStackManualMatch}
                     onReplaceRosterPlayer={replaceRosterPlayer}
                     onToggleManualPick={toggleManualPick}
                     getSessionPlayerStatus={getSessionPlayerStatus}
@@ -204,6 +238,8 @@ function App() {
                     onShuffleRoster={shuffleRoster}
                     buildQueueList={buildQueueList}
                     forfeitMatch={forfeitMatch}
+                    onSetStackPlayingNext={setStackPlayingNext}
+                    onShuffleStackTeams={shuffleStackTeams}
                   />
                 ) : (
                   <Navigate to="/club" />
@@ -304,11 +340,11 @@ function App() {
           </div>
         </div>
       </Modal> */}
-      <TourModal
-        open={helpOpen}
-        startPage={pageToTourIndex[currentPage] ?? 0}
-        onClose={() => setHelpOpen(false)}
-      />
+      {TOURS_ENABLED && currentPage !== 'landing' && (showFirstRunTour ? (
+        <TourModal startPage={0} pages={quickTourPages} onClose={dismissFirstRunTour} />
+      ) : helpOpen && (
+        <TourModal startPage={pageToTourIndex[currentPage] ?? 0} onClose={() => setHelpOpen(false)} />
+      ))}
     </>
   )
 }

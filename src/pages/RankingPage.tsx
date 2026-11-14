@@ -1,3 +1,4 @@
+import { TrophyIcon } from '@heroicons/react/24/outline'
 import type { Member, Session, Skill } from '../types/app'
 
 type RankingSort = 'score'|'winRate' | 'games' | 'name' | 'skill'
@@ -25,9 +26,9 @@ export function RankingPage({
   session,
   memberById,
   sortBy,
-  onSortBy,
+  // onSortBy,
   skillFilter,
-  onSkillFilter,
+  // onSkillFilter,
 }: RankingPageProps) {
   const rankedMembers = (session.participantIds ?? session.playingIds)
     .map((id) => {
@@ -35,7 +36,14 @@ export function RankingPage({
       const stats = session.stats[id]
       const winRate = stats.gamesPlayed > 0 ? (stats.wins / stats.gamesPlayed) * 100 : 0
       const score = stats.wins*100-(stats.gamesPlayed-stats.wins)
-      return { id, member, stats, winRate, score }
+      const points = session.history.reduce((total, match) => {
+        if (match.teamA.includes(id)) return total + match.scoreA
+        if (match.teamB.includes(id)) return total + match.scoreB
+        return total
+      }, 0)
+      const losses = Math.max(0, stats.gamesPlayed - stats.wins)
+      const arrivedAt = stats.joinedAtTime ?? stats.joinedAt ?? Number.MAX_SAFE_INTEGER
+      return { id, member, stats, winRate, score, points, losses, arrivedAt }
     })
     .filter((entry) => entry.stats.gamesPlayed > 0) 
     .filter((entry) => (skillFilter === 'all' ? true : entry.member.skill === skillFilter))
@@ -46,23 +54,35 @@ export function RankingPage({
         return (
           a.member.skill.localeCompare(b.member.skill) ||
           b.score - a.score ||
+          b.points - a.points ||
+          a.arrivedAt - b.arrivedAt ||
           b.winRate - a.winRate ||
           b.stats.wins - a.stats.wins
         )
       }
-      if(sortBy === 'winRate')return b.stats.wins - a.stats.wins
-      return b.score-a.score || b.winRate - a.winRate || b.stats.wins - a.stats.wins
+      if(sortBy === 'winRate') return b.winRate - a.winRate || b.points - a.points
+      return b.score - a.score || b.points - a.points || a.arrivedAt - b.arrivedAt || b.winRate - a.winRate || b.stats.wins - a.stats.wins
     })
 
   return (
     <section className="card stack ranking-page">
-      <div className="section-title">
-        <h3>Ranking</h3>
-        <div className="actions ranking-actions">
+      <header className="ranking-header">
+        <span className="ranking-header-icon" aria-hidden="true">
+          <TrophyIcon width={21} height={21} />
+        </span>
+        <div className="ranking-header-title">
+          <h3>Ranking</h3>
+          <p>Session leaderboard</p>
+        </div>
+        <span className="ranking-header-count">
+          {rankedMembers.length} {rankedMembers.length === 1 ? 'player' : 'players'}
+        </span>
+      </header>
+        {/* <div className="actions ranking-actions">
           <label className="filter-label">
             <span>Sort</span>
             <select value={sortBy} onChange={(e) => onSortBy(e.target.value as RankingSort)}>
-              <option value="score">Stat Score</option>
+              <option value="score">Ranking</option>
               <option value="winRate">Win Rate</option>
               <option value="games">No. of Games</option>
               <option value="name">Name</option>
@@ -85,8 +105,7 @@ export function RankingPage({
               <option value="Elite">Elite</option>
             </select>
           </label>
-        </div>
-      </div>
+        </div> */}
 
       <div className="rank-table-wrapper">
         <table className="leaderboard-table">
@@ -94,10 +113,9 @@ export function RankingPage({
             <tr>
               <th className="rank-col">#</th>
               <th className="player-col">Player</th>
-              <th>G</th>
-              <th>W</th>
+              <th>PNTS</th>
               <th>WR</th>
-              <th>Score</th>
+              <th>StNdng</th>
             </tr>
           </thead>
 
@@ -106,7 +124,7 @@ export function RankingPage({
               return (
                 <tr
                   key={entry.id}
-                  className={`leaderboard-row ${skillBorderClass(entry.member.skill)}`}
+                  className={`leaderboard-row ${index < 3 ? `leaderboard-podium leaderboard-place-${index + 1}` : ''} ${session.matchmakingMode === 'win-lose-stack' ? '' : skillBorderClass(entry.member.skill)}`}
                 >
                   <td className="leaderboard-rank">
                     {index === 0
@@ -121,10 +139,9 @@ export function RankingPage({
                   <td className="leaderboard-player">
                     <strong>{entry.member.name}</strong>
                   </td>
-                  <td>{entry.stats.gamesPlayed}</td>
-                  <td>{entry.stats.wins}</td>
+                  <td><strong>{entry.points} pts</strong></td>
                   <td>{entry.winRate.toFixed(1)}%</td>
-                  <td><strong>{entry.score}</strong></td>
+                  <td><strong>{entry.stats.wins}-{entry.losses}</strong></td>
 
 
                 </tr>

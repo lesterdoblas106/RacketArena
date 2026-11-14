@@ -1,35 +1,26 @@
-import {useEffect, useState } from "react";
+import { useState } from "react";
 import "./TourModal.css";
-import { tourPages } from "./tourData";
+import { tourPages, type TourPage } from "./tourData";
 
 interface TourModalProps {
-  open: boolean;
   startPage: number;
+  pages?: TourPage[];
   onClose: () => void;
 }
 
 export default function TourModal({
-  open,
   startPage,
+  pages = tourPages,
   onClose,
 }: TourModalProps) {
   const [page, setPage] = useState(startPage);
 
-  useEffect(() => {
-  if (open) {
-    setPage(startPage);
-  }
-}, [open, startPage]);
-
-  if (!open) return null;
-
-  const current = tourPages[page];
+  const current = pages[page];
   const isFirst = page === 0;
-  const isLast = page === tourPages.length - 1;
+  const isLast = page === pages.length - 1;
 
   const handleNext = () => {
     if (isLast) {
-      localStorage.setItem("tourCompleted", "true");
       onClose();
       return;
     }
@@ -43,14 +34,9 @@ export default function TourModal({
     }
   };
 
-  const handleSkip = () => {
-    localStorage.setItem("tourCompleted", "true");
-    onClose();
-  };
-
   return (
     <div className="tour-overlay">
-      <div className="tour-modal">
+      <div className="tour-modal" role="dialog" aria-modal="true" aria-label={current.title}>
 
         <div className="tour-image">
           {current.image ? (
@@ -68,8 +54,8 @@ export default function TourModal({
             ))}
         </div>
 
-        <div className="tour-dots">
-          {tourPages.map((_, index) => (
+        <div className="tour-dots" aria-label={`Step ${page + 1} of ${pages.length}`}>
+          {pages.map((_, index) => (
             <span
               key={index}
               className={`tour-dot ${
@@ -83,7 +69,7 @@ export default function TourModal({
 
           <button
             className="tour-btn secondary"
-            onClick={handleSkip}
+            onClick={onClose}
           >
             Skip
           </button>
