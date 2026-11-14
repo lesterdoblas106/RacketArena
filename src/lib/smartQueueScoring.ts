@@ -1,0 +1,96 @@
+export type SmartQueuePlayer = {
+  id: string
+  totalGames: number
+  skill: number
+  waitingScore: number
+}
+
+type Pair<T> = readonly [T, T]
+export type Doubles<T> = readonly [Pair<T>, Pair<T>]
+
+export const smartQueueWeights = {
+  game: 0.25,
+  waiting: 0.20,
+  skill: 0.20,
+  team: 0.15,
+  teammate: 0.10,
+  opponent: 0.10,
+} as const
+
+type Objective = keyof typeof smartQueueWeights
+const objectives = Object.keys(smartQueueWeights) as Objective[]
+
+export function calculateWaitingScore(currentWaitMs: number, averageWaitMs: number) {
+  return 0.7 * currentWaitMs + 0.3 * averageWaitMs
+}
+
+export function buildPairingCounts(
+  history: readonly { teamA: readonly string[]; teamB: readonly string[] }[],
+) {
+  const teammate = new Map<string, number>()
+  const opponent = new Map<string, number>()
+  const key = (a: string, b: string) => JSON.stringify(a < b ? [a, b] : [b, a])
+  const increment = (counts: Map<string, number>, a: string, b: string) => {
+    const pair = key(a, b)
+    counts.set(pair, (counts.get(pair) ?? 0) + 1)
+  }
+
+  for (const { teamA, teamB } of history) {
+    for (const team of [teamA, teamB]) {
+      team.forEach((a, index) => {
+        for (const b of team.slice(index + 1)) increment(teammate, a, b)
+      })
+    }
+    for (const a of teamA) {
+      for (const b of teamB) increment(opponent, a, b)
+    }
+  }
+
+  return {
+    teammate: (a: string, b: string) => teammate.get(key(a, b)) ?? 0,
+    opponent: (a: string, b: string) => opponent.get(key(a, b)) ?? 0,
+  }
+}
+
+const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0)
+
+export function scoreSmartQueueArrangement(
+  [teamA, teamB]: Doubles<SmartQueuePlayer>,
+  maxWaitingScore: number,
+  counts: ReturnType<typeof buildPairingCounts>,
+  { alpha = 1, lambdaT = 1, lambdaO = 1 } = {},
+) {
+  const players = [...teamA, ...teamB]
+  const pairs = players.flatMap((a, index) => players.slice(index + 1).map((b) => [a, b] as const))
+  const gameDifferences = pairs.map(([a, b]) => Math.abs(a.totalGames - b.totalGames))
+  const skillDifferences = pairs.map(([a, b]) => Math.abs(a.skill - b.skill))
+  const teammateCounts = [teamA, teamB].map(([a, b]) => counts.teammate(a.id, b.id))
+  const opponentCounts = teamA.flatMap((a) => teamB.map((b) => counts.opponent(a.id, b.id)))
+
+  const raw = {
+    averageGameDifference: sum(gameDifferences) / 6,
+    meanWaitingScore: sum(players.map((player) => player.waitingScore)) / 4,
+    maxWaitingScore,
+    sumSkillDifferences: sum(skillDifferences),
+    teamDifference: Math.abs(sum(teamA.map((p) => p.skill)) - sum(teamB.map((p) => p.skill))),
+    averageTeammateRepetitions: sum(teammateCounts) / 2,
+    averageOpponentRepetitions: sum(opponentCounts) / 4,
+    gameDifferences,
+    skillDifferences,
+    teammateCounts,
+    opponentCounts,
+  }
+  const normalized = {
+    game: 1 / (1 + alpha * raw.averageGameDifference),
+    waiting: maxWaitingScore === 0 ? 0 : raw.meanWaitingScore / maxWaitingScore,
+    skill: 1 - raw.sumSkillDifferences / 24,
+    team: 1 - raw.teamDifference / 12,
+    teammate: 1 / (1 + lambdaT * raw.averageTeammateRepetitions),
+    opponent: 1 / (1 + lambdaO * raw.averageOpponentRepetitions),
+  }
+  const weighted = Object.fromEntries(
+    objectives.map((objective) => [objective, smartQueueWeights[objective] * normalized[objective]]),
+  ) as Record<Objective, number>
+
+  return { raw, normalized, weights: smartQueueWeights, weighted, total: 100 * sum(Object.values(weighted)) }
+}
