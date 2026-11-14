@@ -94,3 +94,31 @@ export function scoreSmartQueueArrangement(
 
   return { raw, normalized, weights: smartQueueWeights, weighted, total: 100 * sum(Object.values(weighted)) }
 }
+
+export function selectSmartQueueArrangement(
+  base: SmartQueuePlayer,
+  candidates: readonly SmartQueuePlayer[],
+  maxWaitingScore: number,
+  counts: ReturnType<typeof buildPairingCounts>,
+) {
+  let best: { teams: Doubles<SmartQueuePlayer>; total: number } | undefined
+
+  for (let i = 0; i < candidates.length - 2; i++) {
+    for (let j = i + 1; j < candidates.length - 1; j++) {
+      for (let k = j + 1; k < candidates.length; k++) {
+        const [b, c, d] = [candidates[i], candidates[j], candidates[k]]
+        const arrangements: Doubles<SmartQueuePlayer>[] = [
+          [[base, b], [c, d]],
+          [[base, c], [b, d]],
+          [[base, d], [b, c]],
+        ]
+        for (const teams of arrangements) {
+          const { total } = scoreSmartQueueArrangement(teams, maxWaitingScore, counts)
+          if (!best || total > best.total) best = { teams, total }
+        }
+      }
+    }
+  }
+
+  return best
+}

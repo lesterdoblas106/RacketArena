@@ -18,7 +18,7 @@ import { toast } from 'sonner'
 import { appendResultToStacks, buildStackRotation, buildUpcomingStackMatches, lockReturningMatches, removePlayersFromStacks, restorePlayersToStacks, skipNextStackPlayer } from '../lib/stacking'
 
 import { findSmartQueuePool } from '../lib/smartQueueCandidates'
-import { calculateWaitingScore } from '../lib/smartQueueScoring'
+import { buildPairingCounts, calculateWaitingScore, selectSmartQueueArrangement } from '../lib/smartQueueScoring'
 
 const capitalizeName = (name: string) =>
   name ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : name
@@ -750,45 +750,6 @@ export function useRacketArenaState() {
 
     return score
   }
-  const getCombinationsOfThree = (
-    players: string[],
-  ) => {
-    const combinations: string[][] = []
-
-    for (let i = 0; i < players.length - 2; i++) {
-      for (let j = i + 1; j < players.length - 1; j++ ) {
-        for (let k = j + 1; k < players.length; k++) {
-          combinations.push([
-            players[i],
-            players[j],
-            players[k],
-          ])
-        }
-      }
-    }
-
-    return combinations
-  }
-  const getTeamArrangements = (
-    players: string[],
-  ) => {
-    const [a, b, c, d] = players
-
-    return [
-      {
-        teamA: [a, b],
-        teamB: [c, d],
-      },
-      {
-        teamA: [a, c],
-        teamB: [b, d],
-      },
-      {
-        teamA: [a, d],
-        teamB: [b, c],
-      },
-    ]
-  }
   const getInGamePenalty = (
     players: string[],
     inGamePlayers: Set<string>,
@@ -1017,26 +978,9 @@ const findCompatibleRoster = (
   const pool = findSmartQueuePool(players, preferredBasePlayerId)
   if (!pool) return []
 
-  let bestRoster: string[] = []
-  let bestGameGap = Infinity
-  let lowestScore = Infinity
-  for (const combination of getCombinationsOfThree(pool.candidates.map(({ id }) => id))) {
-    for (const { teamA, teamB } of getTeamArrangements([pool.base.id, ...combination])) {
-      const roster = [...teamA, ...teamB]
-      const gameGap = getRosterGameGap(session, roster)
-      const score = getDiversityScore(session, teamA, teamB)
-        + getInGamePenalty(roster, inGamePlayers)
-        + getSkillOutlierPenalty(roster)
-        + getTeamBalancePenalty(teamA, teamB)
-        - Math.round(roster.reduce((sum, id) => sum + getFairnessScore(session, id), 0) / 60000)
-      if (gameGap < bestGameGap || (gameGap === bestGameGap && score < lowestScore)) {
-        bestGameGap = gameGap
-        lowestScore = score
-        bestRoster = roster
-      }
-    }
-  }
-  return bestRoster
+  const maxWaitingScore = players.reduce((max, player) => Math.max(max, player.waitingScore), 0)
+  const winner = selectSmartQueueArrangement(pool.base, pool.candidates, maxWaitingScore, buildPairingCounts(session.history))
+  return winner?.teams.flat().map(({ id }) => id) ?? []
 }
 
   const balanceTeams = (
@@ -1238,23 +1182,13 @@ const findCompatibleRoster = (
   }
   const generateRoster = () => {
     updateActiveSession((session) => {
-      if (session.endedAt) return session
+      if (session.endedAt || session.matchmakingMode !== 'smart-queue') return session
       const queueList = buildQueueList(session)
-      const queuedPlayers = new Set(
-        session.rosters.flatMap((roster) => roster.playerIds),
-      )
-      const selectedBasePlayerId = manualPickIds.find(
-        (memberId) =>
-          queueList.includes(memberId) &&
-          !queuedPlayers.has(memberId),
-      )
 
       const incompleteRosterIndex =
         session.rosters.findIndex(
           (roster) => roster.playerIds.length < 4,
         )
-
-      let selectedPlayers: string[]
 
       if (incompleteRosterIndex !== -1) {
         const incompleteRoster =
@@ -1275,13 +1209,10 @@ const findCompatibleRoster = (
             !allQueuedPlayers.has(id),
         )
 
-        selectedPlayers = [
+        const selectedPlayers = balanceTeams([
           ...incompleteRoster.playerIds,
           ...availablePlayers.slice(0, missingSlots),
-        ]
-
-        selectedPlayers =
-          balanceTeams(selectedPlayers)
+        ])
 
         const updatedRosters = [...session.rosters]
 
@@ -1328,22 +1259,16 @@ const findCompatibleRoster = (
           ],
         }
       }
-      const waitSetArr = buildMatchSet(
-        session,
-        queueList,
-        selectedBasePlayerId,
-      )
+      if (manualPickIds.length > 1) return session
+      const selectedPlayers = buildMatchSet(session, queueList, manualPickIds[0])
 
-      if (waitSetArr.length < 4) {
+      if (selectedPlayers.length < 4) {
         toast.warning(
           'Not enough compatible players found.',
         )
 
         return session
       }
-
-      selectedPlayers =
-        balanceTeams(waitSetArr)
 
       return {
         ...session,

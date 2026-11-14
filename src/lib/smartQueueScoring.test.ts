@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildPairingCounts, calculateWaitingScore, scoreSmartQueueArrangement } from './smartQueueScoring.ts'
+import { buildPairingCounts, calculateWaitingScore, scoreSmartQueueArrangement, selectSmartQueueArrangement } from './smartQueueScoring.ts'
 
 const a = { id: 'a', totalGames: 0, skill: 1, waitingScore: 10 }
 const b = { id: 'b', totalGames: 1, skill: 2, waitingScore: 20 }
@@ -42,4 +42,29 @@ test('zero waiting and zero history have defined scores', () => {
   assert.equal(score.normalized.teammate, 1)
   assert.equal(score.normalized.opponent, 1)
   assert.equal(calculateWaitingScore(100, 200), 130)
+})
+
+test('history can make a less balanced team arrangement win', () => {
+  const counts = buildPairingCounts(Array.from({ length: 5 }, () => ({
+    teamA: ['a', 'd'], teamB: ['b', 'c'],
+  })))
+  const winner = selectSmartQueueArrangement(a, [b, c, d], 40, counts)
+  assert.deepEqual(winner?.teams, [[a, c], [b, d]])
+})
+
+test('compares later combinations by composite score even when their game gap is higher', () => {
+  const players = [
+    { ...a, waitingScore: 0 },
+    { ...b, totalGames: 0, skill: 1, waitingScore: 0 },
+    { ...c, totalGames: 0, skill: 1, waitingScore: 0 },
+    { ...d, totalGames: 0, skill: 2, waitingScore: 0 },
+    { id: 'e', totalGames: 1, skill: 1, waitingScore: 100 },
+  ]
+  const counts = buildPairingCounts([
+    { teamA: ['a', 'b'], teamB: ['c', 'd'] },
+    { teamA: ['a', 'c'], teamB: ['b', 'd'] },
+    { teamA: ['a', 'd'], teamB: ['b', 'c'] },
+  ])
+  const winner = selectSmartQueueArrangement(players[0], players.slice(1), 100, counts)
+  assert.ok(winner?.teams.flat().some(({ id }) => id === 'e'))
 })
