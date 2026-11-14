@@ -17,14 +17,8 @@ import {
 import { toast } from 'sonner'
 import { appendResultToStacks, buildStackRotation, buildUpcomingStackMatches, lockReturningMatches, removePlayersFromStacks, restorePlayersToStacks, skipNextStackPlayer } from '../lib/stacking'
 
-const compatibilityLayers = [
-  { maxGameGap: 0, maxSkillGap: 1 },
-  { maxGameGap: 0, maxSkillGap: 2 },
-  { maxGameGap: 1, maxSkillGap: 2 },
-  { maxGameGap: 1, maxSkillGap: 3 },
-  { maxGameGap: 1, maxSkillGap: 4 },
-  { maxGameGap: 2, maxSkillGap: 5 },
-] as const
+import { findSmartQueuePool } from '../lib/smartQueueCandidates'
+import { calculateWaitingScore } from '../lib/smartQueueScoring'
 
 const capitalizeName = (name: string) =>
   name ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : name
@@ -666,23 +660,6 @@ export function useRacketArenaState() {
     return skillOrder.indexOf(memberById[memberId].skill) + 1
   }
       
-  const isCompatiblePlayer = (
-    session: Session,
-    basePlayerId: string,
-    comparedPlayerId: string,
-    layer: (typeof compatibilityLayers)[number],
-    inGamePlayers?: ReadonlySet<string>,
-  ) => {
-    const baseTotalGames =
-      getTotalGames(session.stats[basePlayerId]) + (inGamePlayers?.has(basePlayerId) ? 1 : 0)
-    const comparedTotalGames =
-      getTotalGames(session.stats[comparedPlayerId]) + (inGamePlayers?.has(comparedPlayerId) ? 1 : 0)
-
-    const gameGap = Math.abs(baseTotalGames - comparedTotalGames)
-    const skillGap = Math.abs(getSkillLevel(basePlayerId) - getSkillLevel(comparedPlayerId))
-
-    return gameGap <= layer.maxGameGap && skillGap <= layer.maxSkillGap
-  }
   const getTeammateCount = (
     session: Session,
     playerA: string,
@@ -988,7 +965,7 @@ const buildMatchSet = (
       const candidates = [...new Set([...queueList, ...eligiblePlayers])]
         .filter((id) => eligiblePlayers.has(id))
       const roster = findCompatibleRoster(
-        session, candidates, preferredBasePlayerId, queuedPlayers, inGamePlayers, new Set(), true,
+        session, candidates, preferredBasePlayerId, queuedPlayers, inGamePlayers, new Set(),
       )
       if (roster.length === 4) return roster
     }
@@ -1017,227 +994,51 @@ const findCompatibleRoster = (
   queuedPlayers: ReadonlySet<string>,
   inGamePlayers: Set<string>,
   blockedInGamePlayers: ReadonlySet<string>,
-  expandedPool = false,
 ) => {
-  if (queueList.length < 4) return []
-
-  const baseIndexes = queueList
-    .map((_, index) => index)
-    .sort((a, b) => {
-      if (!preferredBasePlayerId) {
-        return a - b
-      }
-
-      if (queueList[a] === preferredBasePlayerId) {
-        return -1
-      }
-
-      if (queueList[b] === preferredBasePlayerId) {
-        return 1
-      }
-
-      return a - b
-    })
-  const getEffectiveGames = (
-    session: Session,
-    memberId: string,
-  ) => {
-    const stats = session.stats[memberId]
-
-    return (
-      getTotalGames(stats) +
-      (inGamePlayers.has(memberId) ? 1 : 0)
+  const priority = new Set(session.priorityList)
+  const now = Date.now()
+  const players = [...new Set(queueList)]
+    .filter((id) =>
+      session.playingIds.includes(id) && session.stats[id] && memberById[id]
+      && !queuedPlayers.has(id) && !blockedInGamePlayers.has(id),
     )
-  }
-    // console.log(
-    //   "Queue List:",
-    //   queueList.map(id => ({
-    //     name: memberById[id]?.name,
-    //     blocked: blockedInGamePlayers.has(id),
-    //     inGame: inGamePlayers.has(id),
-    //   }))
-    // )
-
-  for (const baseIndex of baseIndexes) {
-    const basePlayer = queueList[baseIndex]
-
-    if (blockedInGamePlayers.has(basePlayer)) {
-      continue
-    }
-    if (queuedPlayers.has(basePlayer)) {
-      continue
-    }
-
-    const baseTotalGames = getEffectiveGames(session,basePlayer,)
-
-    const startIndex = baseTotalGames  === 2 ? baseIndex + 2 : baseIndex + 1
-    
-    const comparedStartIndex =
-      expandedPool || basePlayer === preferredBasePlayerId ? 0 : startIndex
-    
-    let bestRoster: string[] = []
-    let lowestScore = Infinity
-    let bestGameGap = Infinity  
-    for (const layer of compatibilityLayers) {
-    // const waitSetArr = [basePlayer]
-      const compatiblePlayers: string[] = []
-
-      for ( let i = comparedStartIndex ; i < queueList.length ; i++) {
-        const comparedPlayer = queueList[i]
-
-        if (
-          comparedPlayer === basePlayer ||
-          compatiblePlayers.includes(comparedPlayer) ||
-          queuedPlayers.has(comparedPlayer) ||
-          blockedInGamePlayers.has(comparedPlayer)
-        ) {
-          continue
-        }
-        //           console.log({
-        //   basePlayer: memberById[basePlayer]?.name,
-        //   comparedPlayer: memberById[comparedPlayer]?.name,
-        //   blocked: blockedInGamePlayers.has(comparedPlayer),
-        //   inGame: inGamePlayers.has(comparedPlayer),
-        // })
-        const compatible =
-          isCompatiblePlayer(
-            session,
-            basePlayer,
-            comparedPlayer,
-            layer,
-            expandedPool ? inGamePlayers : undefined,
-          )
-
-        if (compatible) {
-          compatiblePlayers.push(comparedPlayer)
-        }
+    .map((id) => {
+      const stats = session.stats[id]
+      const currentWait = session.startedAt && !inGamePlayers.has(id) ? Math.max(0, now - stats.waitingSince) : 0
+      return {
+        id,
+        totalGames: getTotalGames(stats),
+        skill: getSkillLevel(id),
+        waitingScore: calculateWaitingScore(currentWait, stats.averageWaitMs ?? 0),
+        latePriority: priority.has(id),
+        arrivalOrder: stats.joinedAtTime ?? stats.joinedAt,
       }
-      // console.log({
-      //   basePlayer: memberById[basePlayer]?.name,
-      //   layer,
-      //   compatiblePlayers: compatiblePlayers.map(
-      //     id => memberById[id]?.name
-      //   ),
-      // })
-      if (compatiblePlayers.length >= 3) {
-        const combinations =
-          getCombinationsOfThree(
-            compatiblePlayers,
-          )
+    })
+  const pool = findSmartQueuePool(players, preferredBasePlayerId)
+  if (!pool) return []
 
-
-        for (const combination of combinations) {
-          const fourPlayers = [
-            basePlayer,
-            ...combination,
-          ]
-
-          const arrangements =
-            getTeamArrangements(
-              fourPlayers,
-            )
-
-          for (const arrangement of arrangements) {
-            const rosterPlayers = [
-              ...arrangement.teamA,
-              ...arrangement.teamB,
-            ]
-            const rosterGameGap =
-              getRosterGameGap(
-                session,
-                rosterPlayers,
-              )
-
-            const diversityScore =
-              getDiversityScore(
-                session,
-                arrangement.teamA,
-                arrangement.teamB,
-              )
-
-            const inGamePenalty =
-              getInGamePenalty(
-                rosterPlayers,
-                inGamePlayers,
-              )
-
-            const skillOutlierPenalty =
-              getSkillOutlierPenalty(
-                rosterPlayers,
-              )
-            const teamBalancePenalty =
-              getTeamBalancePenalty(
-                arrangement.teamA,
-                arrangement.teamB,
-              )
-            const waitingReward =
-              Math.round(rosterPlayers.reduce(
-                (sum, playerId) =>
-                  sum + getFairnessScore(session, playerId),
-                0,
-              ) / 60000)
-
-            const totalScore =
-              diversityScore +
-              inGamePenalty + 
-              skillOutlierPenalty +
-              teamBalancePenalty -
-              waitingReward
-              // console.log({
-              //   roster: rosterPlayers.map(id => memberById[id].name),
-              //   gameGap: rosterGameGap,
-              //   totalScore,
-              //   diversityScore,
-              //   inGamePenalty,
-              //   skillOutlierPenalty,
-              //   teamBalancePenalty,
-              // })
-            if (rosterGameGap < bestGameGap) {
-                bestGameGap = rosterGameGap
-
-              lowestScore = totalScore
-
-              bestRoster = rosterPlayers
-
-              continue
-            }
-            if ( rosterGameGap === bestGameGap && 
-              totalScore < lowestScore ) {
-              lowestScore = totalScore
-
-              bestRoster = rosterPlayers
-            }
-          }
-        }
-        // console.log({
-        //   basePlayer: memberById[basePlayer].name,
-        //   compatiblePlayers: compatiblePlayers.map(id => memberById[id].name),
-        //   bestRoster: bestRoster.map(id => memberById[id].name),
-        // });
-        if (bestRoster.length === 4) {
-        //   console.log({
-        //   basePlayer: memberById[basePlayer]?.name,
-        //   compatiblePlayers: compatiblePlayers.map(
-        //     id => memberById[id]?.name
-        //   ),
-        //   bestRoster: bestRoster.map(
-        //     id => memberById[id]?.name
-        //   ),
-        //   lowestScore,
-        // })
-          return bestRoster
-        }
+  let bestRoster: string[] = []
+  let bestGameGap = Infinity
+  let lowestScore = Infinity
+  for (const combination of getCombinationsOfThree(pool.candidates.map(({ id }) => id))) {
+    for (const { teamA, teamB } of getTeamArrangements([pool.base.id, ...combination])) {
+      const roster = [...teamA, ...teamB]
+      const gameGap = getRosterGameGap(session, roster)
+      const score = getDiversityScore(session, teamA, teamB)
+        + getInGamePenalty(roster, inGamePlayers)
+        + getSkillOutlierPenalty(roster)
+        + getTeamBalancePenalty(teamA, teamB)
+        - Math.round(roster.reduce((sum, id) => sum + getFairnessScore(session, id), 0) / 60000)
+      if (gameGap < bestGameGap || (gameGap === bestGameGap && score < lowestScore)) {
+        bestGameGap = gameGap
+        lowestScore = score
+        bestRoster = roster
       }
     }
-//     console.log(
-//   "Failed to build roster for",
-//   memberById[basePlayer].name
-// );
   }
-
-  return []
+  return bestRoster
 }
-    
+
   const balanceTeams = (
     playerIds: string[],
   ) => {
@@ -2261,7 +2062,7 @@ const buildQueueList = (
   }
 
   const priorityPlayers =
-    session.priorityList
+    [...session.priorityList]
       .sort(sortByWaitingTime)
 
   const regularPlayers =
