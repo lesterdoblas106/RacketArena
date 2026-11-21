@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChartBarIcon } from '@heroicons/react/24/solid'
 import { loadScoringHistory } from '../lib/scoringHistoryStorage'
-import { rankArrangements, scoringHistoryLimit } from '../lib/smartQueueInspector'
+import { getGameDifferenceBreakdown, rankArrangements, scoringHistoryLimit } from '../lib/smartQueueInspector'
 import type {
   AutomaticScoring,
   ScoredArrangement,
@@ -298,6 +298,7 @@ function Breakdown({
 }) {
   const { raw, normalized, weights, weighted, total } = score
   const { formula } = data
+  const game = getGameDifferenceBreakdown(data, { teams: [teamA, teamB], score })
   const players = [...teamA, ...teamB].map((id) => data.players[id])
   const pairLabels = players.flatMap((a, index) =>
     players.slice(index + 1).map((b) => `${a.name} / ${b.name}`),
@@ -319,10 +320,19 @@ function Breakdown({
   ]
   const details = [
     <>
-      <ul>{pairValues(pairLabels, raw.gameDifferences)}</ul>
       <p>
-        Sum {sum(raw.gameDifferences)} ÷ 6 = {format(raw.averageGameDifference)}. 1 ÷ (1 +{' '}
-        {formula.alpha} × {format(raw.averageGameDifference)}) = {format(normalized.game)}.
+        {game.base
+          ? `Base player: ${game.base.name} · ${game.base.totalGames} total games.`
+          : 'Historical scoring: stored all-player comparisons.'}
+      </p>
+      <ul>{pairValues(game.labels, game.differences)}</ul>
+      <p>
+        Sum {format(game.sum)} ÷ {game.divisor} = {format(game.average)}. 1 ÷ (1 +{' '}
+        {formula.alpha} × {format(game.average)}) = {format(game.normalized)}.
+      </p>
+      <p>
+        Contribution: {format(game.normalized)} × {format(weights.game)} × 100 ={' '}
+        {format(game.contribution)} points.
       </p>
     </>,
     <>

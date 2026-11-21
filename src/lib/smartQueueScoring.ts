@@ -69,17 +69,21 @@ export function scoreSmartQueueArrangement(
   [teamA, teamB]: Doubles<SmartQueuePlayer>,
   maxWaitingScore: number,
   counts: ReturnType<typeof buildPairingCounts>,
-  { alpha = smartQueueFormula.alpha, lambdaT = smartQueueFormula.lambdaT, lambdaO = smartQueueFormula.lambdaO } = {},
+  { base = teamA[0], alpha = smartQueueFormula.alpha, lambdaT = smartQueueFormula.lambdaT, lambdaO = smartQueueFormula.lambdaO } = {},
 ) {
   const players = [...teamA, ...teamB]
   const pairs = players.flatMap((a, index) => players.slice(index + 1).map((b) => [a, b] as const))
-  const gameDifferences = pairs.map(([a, b]) => Math.abs(a.totalGames - b.totalGames))
+  const gameDifferences = players.filter(({ id }) => id !== base.id)
+    .map((player) => Math.abs(base.totalGames - player.totalGames))
   const skillDifferences = pairs.map(([a, b]) => Math.abs(a.skill - b.skill))
   const teammateCounts = [teamA, teamB].map(([a, b]) => counts.teammate(a.id, b.id))
   const opponentCounts = teamA.flatMap((a) => teamB.map((b) => counts.opponent(a.id, b.id)))
 
+  // Optional metadata distinguishes new scores from persisted historical snapshots.
+  const gameMetadata: { gameDifferenceBaseId?: string } = { gameDifferenceBaseId: base.id }
   const raw = {
-    averageGameDifference: sum(gameDifferences) / 6,
+    ...gameMetadata,
+    averageGameDifference: sum(gameDifferences) / 3,
     meanWaitingScore: sum(players.map((player) => player.waitingScore)) / 4,
     maxWaitingScore,
     sumSkillDifferences: sum(skillDifferences),
@@ -130,7 +134,7 @@ export function selectSmartQueueArrangement(
           [[base, d], [b, c]],
         ]
         for (const teams of arrangements) {
-          const score = scoreSmartQueueArrangement(teams, maxWaitingScore, counts)
+          const score = scoreSmartQueueArrangement(teams, maxWaitingScore, counts, { base })
           const { total } = score
           onEvaluated?.(teams, score)
           if (!best || total > best.total) best = { teams, total }

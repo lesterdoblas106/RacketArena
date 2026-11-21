@@ -616,3 +616,26 @@ for (const mode of ['smart-queue', 'elo-smart-queue'] as const) {
     assert.equal(snapshot.scoring.layer, mode === 'smart-queue' ? 1 : 2)
   })
 }
+
+test('game scoring uses the selected Late Priority base and the same effective totals as eligibility', () => {
+  const render = setup(ids.slice(0, 4), {
+    priorityList: ['a'], playerList: ['b', 'c', 'd'],
+    stats: {
+      a: stats({ gamesPlayed: 1, missedGames: 4 }),
+      b: stats({ gamesPlayed: 2, missedGames: 2 }),
+      c: stats({ gamesPlayed: 3, missedGames: 1 }),
+      d: stats({ gamesPlayed: 4 }),
+    },
+  })
+  render().generateRoster()
+  const snapshot = render().activeSession!.scoringSnapshots![0]
+  assert.ok('scoring' in snapshot)
+  assert.equal(snapshot.scoring.baseId, 'a')
+  assert.equal(snapshot.scoring.players.a.totalGames, 5)
+  assert.equal(snapshot.scoring.layer, 3)
+  for (const { score } of snapshot.scoring.arrangements) {
+    assert.equal(score.raw.gameDifferenceBaseId, 'a')
+    assert.deepEqual(score.raw.gameDifferences, [1, 1, 1])
+    assert.equal(score.normalized.game, 0.5)
+  }
+})
