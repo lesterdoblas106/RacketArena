@@ -5,6 +5,7 @@ import { TrophyIcon, FlagIcon, TrashIcon, BoltIcon, ArrowPathRoundedSquareIcon, 
 import { Timer, Watch } from 'lucide-react'
 import { toast } from 'sonner'
 import { WinLoseStackView } from './WinLoseStackView'
+import { MatchScoringInspector } from '../components/MatchScoringInspector'
 import { getCurrentBenchWait, getTotalGames } from '../lib/queueSession'
 import { calculateWaitingScore } from '../lib/smartQueueScoring'
 
@@ -370,6 +371,7 @@ export function QueuePage({
   const totalPlayers = sortedPlayers.length
 
   return (
+    <>
     <section className="queue-layout">
       <article className="card courts-panel">
         <header className="court-header">
@@ -1086,6 +1088,8 @@ export function QueuePage({
         <p>This will immediately end the current match.</p>
       </Modal>
     </section>
+    <MatchScoringInspector key={session.id} sessionId={session.id} snapshots={session.scoringSnapshots} />
+    </>
       
   )
 }

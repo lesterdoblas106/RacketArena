@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildPairingCounts, calculateWaitingScore, scoreSmartQueueArrangement, selectSmartQueueArrangement } from './smartQueueScoring.ts'
+import { buildPairingCounts, calculateWaitingScore, scoreSmartQueueArrangement, selectSmartQueueArrangement, smartQueueWeights } from './smartQueueScoring.ts'
+import { rankArrangements, type ScoredArrangement } from './smartQueueInspector.ts'
 
 const a = { id: 'a', totalGames: 0, skill: 1, waitingScore: 10 }
 const b = { id: 'b', totalGames: 1, skill: 2, waitingScore: 20 }
@@ -30,9 +31,29 @@ test('calculates all six objectives from pairwise differences and session histor
   assert.equal(normalized.team, 1 - 4 / 12)
   assert.equal(normalized.teammate, 1 / 3)
   assert.equal(normalized.opponent, 1 / 3.5)
-  assert.equal(Object.values(weights).reduce((sum, value) => sum + value, 0), 1)
-  assert.equal(weighted.waiting, 0.1)
-  assert.ok(Math.abs(total - 47.23214285714286) < 1e-10)
+  assert.deepEqual(weights, smartQueueWeights)
+  assert.deepEqual(weighted, {
+    game: weights.game * (1 / (1 + 10 / 6)),
+    waiting: weights.waiting * 0.5,
+    skill: weights.skill * (1 - 10 / 24),
+    team: weights.team * (1 - 4 / 12),
+    teammate: weights.teammate * (1 / 3),
+    opponent: weights.opponent * (1 / 3.5),
+  })
+  assert.equal(total, 100 * Object.values(weighted).reduce((sum, value) => sum + value, 0))
+})
+
+test('captures every evaluated arrangement and preserves evaluation order on exact ties', () => {
+  const [base, ...candidates] = ['a', 'b', 'c', 'd', 'e'].map((id) => ({ ...a, id }))
+  const captures: ScoredArrangement[] = []
+  const winner = selectSmartQueueArrangement(base, candidates, 10, buildPairingCounts([]),
+    ([[a, b], [c, d]], score) => captures.push({ teams: [[a.id, b.id], [c.id, d.id]], score }),
+  )
+  const ranked = rankArrangements(captures)
+  assert.equal(ranked.length, 12)
+  assert.deepEqual(ranked.map(({ index }) => index), Array.from({ length: 12 }, (_, index) => index))
+  assert.deepEqual(ranked[0].teams.flat(), winner?.teams.flat().map(({ id }) => id))
+  assert.equal(ranked[0].score.total, winner?.total)
 })
 
 test('zero waiting and zero history have defined scores', () => {

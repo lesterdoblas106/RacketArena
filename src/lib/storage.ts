@@ -25,5 +25,13 @@ export const loadState = (): PersistedState | null => {
 }
 
 export const saveState = (state: PersistedState): void => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    ...state,
+    sessions: state.sessions.map((session) => {
+      if (!session.scoringSnapshots) return session
+      const savedSession = { ...session }
+      delete savedSession.scoringSnapshots
+      return savedSession
+    }),
+  }))
 }

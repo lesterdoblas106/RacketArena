@@ -3356,14 +3356,16 @@ button.primary.big:hover {
 .win-lose-stack-page {
   display: grid;
   grid-template-columns: minmax(300px, 1.1fr) minmax(420px, 1.7fr);
-  grid-template-rows: 37% 63%;
+  grid-template-rows: max-content minmax(0, 1fr);
   grid-template-areas: "rotation next" "rotation courts";
   align-items: start;
   gap: 16px;
   height: calc(100vh - 175px);
+  height: calc(100dvh - 175px);
 }
+.win-lose-stack-page > .card { box-sizing: border-box; margin-bottom: 0; }
 .stack-rotation-card { grid-area: rotation; min-height: 0; height: 100%; overflow-y: auto; }
-.stack-next-card { grid-area: next; min-height: 0; height: 100%; overflow-y: auto; }
+.stack-next-card { grid-area: next; min-height: 0; height: auto; overflow-y: auto; }
 .stack-courts-panel { grid-area: courts; min-height: 0; height: 100%; overflow-y: auto; }
 .stack-courts-panel .court-actions { grid-template-columns: 1fr; }
 .stack-title-card h2, .stack-title-card p, .stack-rotation-card h3, .stack-rotation-card p { margin: 0; }

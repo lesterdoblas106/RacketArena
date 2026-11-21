@@ -9,19 +9,29 @@ type Pair<T> = readonly [T, T]
 export type Doubles<T> = readonly [Pair<T>, Pair<T>]
 
 export const smartQueueWeights = {
-  game: 0.25,
-  waiting: 0.20,
+  game: 0.15,
+  waiting: 0.30,
   skill: 0.20,
-  team: 0.15,
+  team: 0.20,
   teammate: 0.10,
-  opponent: 0.10,
+  opponent: 0.05,
 } as const
 
 type Objective = keyof typeof smartQueueWeights
 const objectives = Object.keys(smartQueueWeights) as Objective[]
 
+export const smartQueueFormula = {
+  alpha: 1,
+  lambdaT: 1,
+  lambdaO: 1,
+  currentWaitWeight: 0.7,
+  averageWaitWeight: 0.3,
+  skillDenominator: 24,
+  teamDenominator: 12,
+}
+
 export function calculateWaitingScore(currentWaitMs: number, averageWaitMs: number) {
-  return 0.7 * currentWaitMs + 0.3 * averageWaitMs
+  return smartQueueFormula.currentWaitWeight * currentWaitMs + smartQueueFormula.averageWaitWeight * averageWaitMs
 }
 
 export function buildPairingCounts(
@@ -58,7 +68,7 @@ export function scoreSmartQueueArrangement(
   [teamA, teamB]: Doubles<SmartQueuePlayer>,
   maxWaitingScore: number,
   counts: ReturnType<typeof buildPairingCounts>,
-  { alpha = 1, lambdaT = 1, lambdaO = 1 } = {},
+  { alpha = smartQueueFormula.alpha, lambdaT = smartQueueFormula.lambdaT, lambdaO = smartQueueFormula.lambdaO } = {},
 ) {
   const players = [...teamA, ...teamB]
   const pairs = players.flatMap((a, index) => players.slice(index + 1).map((b) => [a, b] as const))
@@ -83,8 +93,8 @@ export function scoreSmartQueueArrangement(
   const normalized = {
     game: 1 / (1 + alpha * raw.averageGameDifference),
     waiting: maxWaitingScore === 0 ? 0 : raw.meanWaitingScore / maxWaitingScore,
-    skill: 1 - raw.sumSkillDifferences / 24,
-    team: 1 - raw.teamDifference / 12,
+    skill: 1 - raw.sumSkillDifferences / smartQueueFormula.skillDenominator,
+    team: 1 - raw.teamDifference / smartQueueFormula.teamDenominator,
     teammate: 1 / (1 + lambdaT * raw.averageTeammateRepetitions),
     opponent: 1 / (1 + lambdaO * raw.averageOpponentRepetitions),
   }
@@ -100,6 +110,7 @@ export function selectSmartQueueArrangement(
   candidates: readonly SmartQueuePlayer[],
   maxWaitingScore: number,
   counts: ReturnType<typeof buildPairingCounts>,
+  onEvaluated?: (teams: Doubles<SmartQueuePlayer>, score: ReturnType<typeof scoreSmartQueueArrangement>) => void,
 ) {
   let best: { teams: Doubles<SmartQueuePlayer>; total: number } | undefined
 
@@ -113,7 +124,9 @@ export function selectSmartQueueArrangement(
           [[base, d], [b, c]],
         ]
         for (const teams of arrangements) {
-          const { total } = scoreSmartQueueArrangement(teams, maxWaitingScore, counts)
+          const score = scoreSmartQueueArrangement(teams, maxWaitingScore, counts)
+          const { total } = score
+          onEvaluated?.(teams, score)
           if (!best || total > best.total) best = { teams, total }
         }
       }

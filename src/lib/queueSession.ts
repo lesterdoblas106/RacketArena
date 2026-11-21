@@ -5,9 +5,11 @@ export function getTotalGames(stats: MemberStats) {
 }
 
 export function getAdditionalMissedGames(session: Session, member: MemberStats) {
+  const inGame = new Set(session.courts.flatMap((court) => [...court.teamA, ...court.teamB]))
   const present = session.playingIds
     .filter((id) => session.matchmakingMode === 'smart-queue' || !session.priorityList.includes(id))
-    .map((id) => getTotalGames(session.stats[id]))
+    // An active match already gives this player a turn, even before it finishes.
+    .map((id) => getTotalGames(session.stats[id]) + (inGame.has(id) ? 1 : 0))
   return present.length ? Math.max(0, Math.min(...present) - getTotalGames(member)) : 0
 }
 
@@ -49,6 +51,37 @@ export function clearLatePriority(session: Session, startingPlayers: readonly st
   return {
     priorityList: session.priorityList.filter((id) => !startingPlayers.includes(id)),
     playerList: [...new Set([...session.playerList, ...removed])],
+  }
+}
+
+export function snapshotCourtWaiting(session: Session, playerIds: readonly string[]): Court['preMatchWaiting'] {
+  return Object.fromEntries(playerIds.map((id) => {
+    const { waitingSince, totalWaitMs, waitPeriods, averageWaitMs } = session.stats[id]
+    return [id, { waitingSince, totalWaitMs, waitPeriods, averageWaitMs, latePriority: session.priorityList.includes(id) }]
+  }))
+}
+
+export function rollbackCourtWaiting(session: Session, court: Court) {
+  const stats = { ...session.stats }
+  const restoredPriority: string[] = []
+  for (const id of [...court.teamA, ...court.teamB]) {
+    if (!stats[id]) continue
+    const snapshot = court.preMatchWaiting?.[id]
+    if (snapshot) {
+      const { latePriority, ...waiting } = snapshot
+      stats[id] = { ...stats[id], ...waiting }
+      if (latePriority && session.playingIds.includes(id)) restoredPriority.push(id)
+    } else {
+      // Older matches have no reliable pre-dispatch totals. Preserve those totals
+      // and resume the known waiting interval without inventing past averages.
+      const record = court.waitingRecords?.find((item) => item.memberId === id)
+      if (record) stats[id] = { ...stats[id], waitingSince: record.waitingStartedAt }
+    }
+  }
+  return {
+    stats,
+    priorityList: [...new Set([...session.priorityList, ...restoredPriority])],
+    playerList: session.playerList.filter((id) => !restoredPriority.includes(id)),
   }
 }
 

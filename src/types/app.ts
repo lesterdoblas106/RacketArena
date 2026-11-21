@@ -1,4 +1,5 @@
 import { createId } from '../lib/createId'
+import type { ScoringSnapshot } from '../lib/smartQueueInspector'
 export type Skill =
   | 'Newbie'
   | 'Beginner'
@@ -76,6 +77,7 @@ export type Court = {
   scoreB: number
   startedAt: number | null
   waitingRecords?: MatchWaitingRecord[]
+  preMatchWaiting?: Record<string, Pick<MemberStats, 'waitingSince' | 'totalWaitMs' | 'waitPeriods' | 'averageWaitMs'> & { latePriority: boolean }>
   stackPlayerSources?: Record<string, StackType>
 }
 
@@ -102,6 +104,8 @@ export type MatchHistory = {
 }
 
 export type Session = {
+  /** Runtime only. Full scoring history is stored separately from session data. */
+  scoringSnapshots?: ScoringSnapshot[]
   id: string
   name: string
   createdAt: string

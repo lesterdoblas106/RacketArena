@@ -14,7 +14,19 @@ export const compatibilityLayers = [
   { maxGameGap: 2, maxSkillGap: 6 },
 ] as const
 
-export function findSmartQueuePool(players: readonly SmartQueueCandidate[], preferredBaseId?: string) {
+export type LayerAttempt = {
+  baseId: string
+  layer: number
+  maxGameGap: number
+  maxSkillGap: number
+  qualifiedIds: string[]
+}
+
+export function findSmartQueuePool(
+  players: readonly SmartQueueCandidate[],
+  preferredBaseId?: string,
+  trace?: { onOrder: (ids: string[]) => void; onLayer: (attempt: LayerAttempt) => void },
+) {
   const ordered = [...players].sort((a, b) =>
     Number(b.latePriority) - Number(a.latePriority)
     || a.totalGames - b.totalGames
@@ -24,6 +36,7 @@ export function findSmartQueuePool(players: readonly SmartQueueCandidate[], pref
   const bases = preferredBaseId === undefined
     ? ordered
     : ordered.filter((player) => player.id === preferredBaseId)
+  trace?.onOrder(ordered.map(({ id }) => id))
 
   for (const base of bases) {
     for (const [index, layer] of compatibilityLayers.entries()) {
@@ -32,6 +45,9 @@ export function findSmartQueuePool(players: readonly SmartQueueCandidate[], pref
         && Math.abs(player.totalGames - base.totalGames) <= layer.maxGameGap
         && Math.abs(player.skill - base.skill) <= layer.maxSkillGap,
       )
+      trace?.onLayer({
+        baseId: base.id, layer: index + 1, ...layer, qualifiedIds: candidates.map(({ id }) => id),
+      })
       if (candidates.length >= 3) return { base, candidates, layer: index + 1 }
     }
   }

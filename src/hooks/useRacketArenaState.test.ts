@@ -107,6 +107,29 @@ test('late compensation adds only the shortfall and preserves prior missed games
   assert.deepEqual(session.priorityList, ['c'])
 })
 
+test('successive late arrivals count active turns toward the missed-games baseline', () => {
+  const render = setup(['a', 'b'], {
+    matchmakingMode: 'smart-queue',
+    stats: { a: stats({ gamesPlayed: 3 }), b: stats(), c: stats(), d: stats() },
+    courts: [court('one', { teamA: ['a'], teamB: ['b'], startedAt: 2000 }), court('two')],
+  })
+  render().moveToPlaying('c')
+  assert.equal(render().activeSession!.stats.c.missedGames, 1)
+  assert.equal(render().activeSession!.stats.b.gamesPlayed, 0)
+  render().moveToPlaying('d')
+  assert.equal(render().activeSession!.stats.d.missedGames, 1)
+})
+
+test('a waiting player still sets the minimum below players in active matches', () => {
+  const render = setup(['a', 'b'], {
+    matchmakingMode: 'smart-queue',
+    stats: { a: stats(), b: stats(), c: stats() },
+    courts: [court('one', { teamA: ['a'], startedAt: 2000 }), court('two')],
+  })
+  render().moveToPlaying('c')
+  assert.equal(render().activeSession!.stats.c.missedGames, 0)
+})
+
 test('future rosters can include an active player but cannot overlap courts', () => {
   mock.method(Date, 'now', () => 5000)
   const render = setup(ids.slice(0, 7), {
@@ -132,7 +155,31 @@ test('prefers a complete bench roster when another court has active players', ()
   assert.deepEqual([...render().activeSession!.rosters[0].playerIds].sort(), ids.slice(4))
 })
 
-test('forfeit restarts the bench clock and preserves the wait recorded at dispatch', () => {
+test('captures independent scored generations, including the actual arrangement and input stats', () => {
+  mock.method(Date, 'now', () => 2500)
+  const render = setup(ids)
+  assert.equal(render().activeSession!.scoringSnapshots, undefined)
+  render().generateRoster()
+  const first = render().activeSession!.scoringSnapshots![0]
+  assert.ok('scoring' in first)
+  const decision = first.scoring
+  const recorded = JSON.stringify(first)
+  const roster = render().activeSession!.rosters[0]
+  assert.deepEqual(decision.arrangements[decision.winnerIndex].teams.flat(), roster.playerIds)
+  assert.equal(decision.arrangements.length, 105)
+  assert.equal(decision.players[decision.baseId].totalGames, 0)
+  assert.equal(decision.players[decision.baseId].currentWait, 1500)
+  assert.equal(decision.searches[0].layers[0].qualifiedIds.length, 7)
+  render().assignToCourt(roster.id, 'one')
+  render().endMatch('one', 21, 12)
+  render().generateRoster()
+  const snapshots = render().activeSession!.scoringSnapshots!
+  assert.equal(snapshots.length, 2)
+  assert.notEqual(snapshots[0].id, first.id)
+  assert.equal(JSON.stringify(snapshots[1]), recorded)
+})
+
+test('forfeit restores the continuous bench clock without recording a game', () => {
   mock.method(Date, 'now', () => 2000)
   const render = setup()
   render().generateRoster()
@@ -140,10 +187,73 @@ test('forfeit restarts the bench clock and preserves the wait recorded at dispat
   mock.method(Date, 'now', () => 6000)
   render().forfeitMatch('one')
   const session = render().activeSession!
-  assert.equal(session.stats.a.waitingSince, 6000)
-  assert.equal(session.stats.a.averageWaitMs, 1000)
-  assert.equal(session.stats.a.waitPeriods, 1)
+  assert.equal(session.stats.a.waitingSince, startedAt)
+  assert.equal(session.stats.a.averageWaitMs, 0)
+  assert.equal(session.stats.a.waitPeriods, 0)
   assert.equal(session.stats.a.gamesPlayed, 0)
+  assert.deepEqual(session.history, [])
+  assert.equal(session.courts[0].preMatchWaiting, undefined)
+})
+
+test('forfeit after reload restores existing waits and late priority, and is idempotent', () => {
+  const minute = 60000
+  mock.method(Date, 'now', () => startedAt + 25 * minute)
+  const before = stats({ gamesPlayed: 2, wins: 1, totalWaitMs: 40 * minute, waitPeriods: 2, averageWaitMs: 20 * minute })
+  let render = setup(ids, {
+    priorityList: ['a'], playerList: ids.slice(1),
+    stats: Object.fromEntries(ids.map((id) => [id, id === 'a' ? before : stats()])),
+  })
+  for (const id of ids.slice(0, 4)) render().toggleManualPick(id)
+  render().queueManualRoster()
+  render().assignToCourt(render().activeSession!.rosters[0].id, 'one')
+  const active = render().activeSession!
+  assert.equal(active.stats.a.waitPeriods, 3)
+  assert.ok(active.courts[0].preMatchWaiting?.a.latePriority)
+  // Serialize exactly as a persisted session would be, retaining court snapshots.
+  render = setup(ids, JSON.parse(JSON.stringify(active)))
+  for (const id of ids.slice(4)) render().toggleManualPick(id)
+  render().queueManualRoster()
+  render().assignToCourt(render().activeSession!.rosters[0].id, 'two')
+  const otherCourt = JSON.stringify(render().activeSession!.courts[1])
+  render().endMatch('two', 21, 19)
+  const history = JSON.stringify(render().activeSession!.history)
+  const otherStats = JSON.stringify(render().activeSession!.stats.e)
+  assert.ok(otherCourt.includes('preMatchWaiting'))
+  assert.equal(render().activeSession!.courts[1].preMatchWaiting, undefined)
+  mock.method(Date, 'now', () => startedAt + 30 * minute)
+  render().forfeitMatch('one')
+  const restored = render().activeSession!
+  assert.deepEqual(restored.stats.a, before)
+  assert.equal((startedAt + 30 * minute - restored.stats.a.waitingSince) * 0.7 + restored.stats.a.averageWaitMs * 0.3, 27 * minute)
+  assert.ok(restored.priorityList.includes('a'))
+  assert.ok(!restored.playerList.includes('a'))
+  assert.equal(JSON.stringify(restored.history), history)
+  assert.equal(JSON.stringify(restored.stats.e), otherStats)
+  render().forfeitMatch('one')
+  assert.deepEqual(render().activeSession!.stats.a, before)
+  // A second dispatched and forfeited turn also restores the original interval.
+  for (const id of ids.slice(0, 4)) render().toggleManualPick(id)
+  render().queueManualRoster()
+  render().assignToCourt(render().activeSession!.rosters[0].id, 'one')
+  render().forfeitMatch('one')
+  assert.deepEqual(render().activeSession!.stats.a, before)
+  assert.equal(render().activeSession!.priorityList.filter((id) => id === 'a').length, 1)
+})
+
+test('legacy forfeits preserve known totals and do not fabricate waiting records', () => {
+  for (const withRecords of [false, true]) {
+    const before = stats({ totalWaitMs: 800, waitPeriods: 2, averageWaitMs: 400 })
+    const render = setup(ids.slice(0, 4), {
+      stats: Object.fromEntries(ids.map((id) => [id, { ...before }])),
+      courts: [court('one', {
+        teamA: ['a', 'b'], teamB: ['c', 'd'], startedAt: 2000,
+        waitingRecords: withRecords ? ids.slice(0, 4).map((memberId) => ({ memberId, waitingStartedAt: startedAt, matchStartedAt: 2000, waitingMs: 1000, gameNumber: 1 })) : undefined,
+      })],
+    })
+    render().forfeitMatch('one')
+    assert.deepEqual(render().activeSession!.stats.a, before)
+    assert.deepEqual(render().activeSession!.history, [])
+  }
 })
 
 test('one, two and four manual picks preserve explicit players', () => {
@@ -154,7 +264,15 @@ test('one, two and four manual picks preserve explicit players', () => {
     else render().generateRoster()
     const [roster] = render().activeSession!.rosters
     assert.deepEqual(roster.playerIds.slice(0, picked.length), picked)
+    const [snapshot] = render().activeSession!.scoringSnapshots!
+    assert.equal('scoring' in snapshot, picked.length === 1)
   }
+})
+
+test('an unsuccessful generation does not create inspector history', () => {
+  const render = setup(['a', 'b', 'c'])
+  render().generateRoster()
+  assert.equal(render().activeSession!.scoringSnapshots, undefined)
 })
 
 test('fills an incomplete roster and permits manual rotation', () => {
@@ -184,4 +302,25 @@ test('win-lose stack still dispatches and advances using match results', () => {
   assert.equal(active.courts[0].teamA.length, 2)
   render().endMatch('one', 21, 19)
   assert.deepEqual(render().activeSession!.winLoseStack.winners, active.courts[0].teamA)
+})
+
+test('win-lose stack forfeits retain their existing waiting lifecycle and restore stacks', () => {
+  mock.method(Date, 'now', () => 2000)
+  const render = setup(ids.slice(0, 4), {
+    matchmakingMode: 'win-lose-stack',
+    winLoseStack: {
+      unplayed: ids.slice(0, 4), winners: [], losers: [], manualMatches: [],
+      initialPlayerIds: [], calibrationComplete: true, playingNext: 'winner', teamRotation: 0,
+    },
+  })
+  render().assignStackMatchToCourt(null, 'one', ids.slice(0, 4))
+  assert.equal(render().activeSession!.courts[0].preMatchWaiting, undefined)
+  mock.method(Date, 'now', () => 6000)
+  render().forfeitMatch('one')
+  const session = render().activeSession!
+  assert.equal(session.stats.a.waitingSince, 6000)
+  assert.equal(session.stats.a.waitPeriods, 1)
+  assert.equal(session.stats.a.averageWaitMs, 1000)
+  assert.deepEqual(session.winLoseStack.unplayed, ids.slice(0, 4))
+  assert.deepEqual(session.history, [])
 })

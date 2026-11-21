@@ -17,11 +17,13 @@ import { toast } from 'sonner'
 import { appendResultToStacks, buildStackRotation, buildUpcomingStackMatches, lockReturningMatches, removePlayersFromStacks, restorePlayersToStacks, skipNextStackPlayer } from '../lib/stacking'
 
 import {
-  clearLatePriority, getAdditionalMissedGames, getCourtWaitingRecords, getCurrentBenchWait,
+  clearLatePriority, getAdditionalMissedGames, getCourtWaitingRecords, getCurrentBenchWait, snapshotCourtWaiting, rollbackCourtWaiting,
   getFinishedCourtWait, getTotalGames, isCourtLineupAvailable, recordBenchWaits,
 } from '../lib/queueSession'
-import { findSmartQueuePool } from '../lib/smartQueueCandidates'
-import { buildPairingCounts, calculateWaitingScore, selectSmartQueueArrangement } from '../lib/smartQueueScoring'
+import { saveScoringHistory } from '../lib/scoringHistoryStorage'
+import { scoringHistoryLimit, type AutomaticScoring, type ScoredArrangement, type ScoringSearch, type ScoringSnapshot } from '../lib/smartQueueInspector'
+import { compatibilityLayers, findSmartQueuePool } from '../lib/smartQueueCandidates'
+import { buildPairingCounts, calculateWaitingScore, selectSmartQueueArrangement, smartQueueFormula } from '../lib/smartQueueScoring'
 
 const capitalizeName = (name: string) =>
   name ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : name
@@ -140,6 +142,14 @@ export function useRacketArenaState() {
     () => sessions.find((session) => session.id === resolvedActiveSessionId) ?? null,
     [sessions, resolvedActiveSessionId],
   )
+
+  const scoringSnapshots = activeSession?.scoringSnapshots
+  useEffect(() => {
+    if (!resolvedActiveSessionId || !scoringSnapshots?.length) return
+    void saveScoringHistory(resolvedActiveSessionId, scoringSnapshots).catch((error) => {
+      console.warn('Unable to save match scoring history', error)
+    })
+  }, [resolvedActiveSessionId, scoringSnapshots])
 
   const memberById = useMemo(
     () =>
@@ -882,6 +892,7 @@ const buildMatchSet = (
   queueList: string[],
   preferredBasePlayerId?: string,
 ) => {
+  const searches: ScoringSearch[] = []
   const queuedPlayers = new Set(
     session.rosters.flatMap(
       (roster) => roster.playerIds,
@@ -898,9 +909,9 @@ const buildMatchSet = (
     (id) => !queuedPlayers.has(id) && !inGamePlayers.has(id),
   ))
   const immediate = findCompatibleRoster(
-    session, [...waitingPlayers], preferredBasePlayerId, queuedPlayers, inGamePlayers, inGamePlayers,
+    session, [...waitingPlayers], preferredBasePlayerId, queuedPlayers, inGamePlayers, inGamePlayers, searches, 'Bench players',
   )
-  if (immediate.length === 4) return immediate
+  if (immediate) return immediate
 
   if (waitingPlayers.size === 3) {
     const eligiblePlayers = new Set(waitingPlayers)
@@ -911,11 +922,11 @@ const buildMatchSet = (
       const candidates = [...new Set([...queueList, ...eligiblePlayers])]
         .filter((id) => eligiblePlayers.has(id))
       const roster = findCompatibleRoster(
-        session, candidates, preferredBasePlayerId, queuedPlayers, inGamePlayers, new Set(),
+        session, candidates, preferredBasePlayerId, queuedPlayers, inGamePlayers, new Set(), searches, `Bench and upcoming courts through ${court.name}`,
       )
-      if (roster.length === 4) return roster
+      if (roster) return roster
     }
-    return []
+    return null
   }
 
   const n = session.rosters.length - activeCourts.length + 1
@@ -925,13 +936,13 @@ const buildMatchSet = (
         activeCourts.length,
         Math.max(1, Math.round(n / activeCourts.length)),
       )
-  if (!eligibleCourtCount) return []
+  if (!eligibleCourtCount) return null
   const futurePlayers = new Set(activeCourts.slice(0, eligibleCourtCount)
     .flatMap(({ teamA, teamB }) => [...teamA, ...teamB]))
   const blockedInGamePlayers = new Set([...inGamePlayers].filter((id) => !futurePlayers.has(id)))
   return findCompatibleRoster(
     session, [...new Set([...queueList, ...session.playingIds])], preferredBasePlayerId,
-    queuedPlayers, inGamePlayers, blockedInGamePlayers,
+    queuedPlayers, inGamePlayers, blockedInGamePlayers, searches, 'Future roster',
   )
 }
 
@@ -942,11 +953,25 @@ const findCompatibleRoster = (
   queuedPlayers: ReadonlySet<string>,
   inGamePlayers: Set<string>,
   blockedInGamePlayers: ReadonlySet<string>,
-) => {
+  searches: ScoringSearch[],
+  label: string,
+): AutomaticScoring | null => {
   const priority = new Set(session.priorityList)
   const arrivalOrder = new Map(session.playingIds.map((id, index) => [id, index]))
   const now = Date.now()
-  if (queueList.length < 4) return []
+  const search: ScoringSearch = { label, players: {}, orderedIds: [], excluded: [], layers: [] }
+  searches.push(search)
+  const supplied = new Set(queueList)
+  for (const id of new Set([...session.playingIds, ...queueList])) {
+    const reason = queuedPlayers.has(id) ? 'Already in a queued roster'
+      : !arrivalOrder.has(id) ? 'Outside active attendance'
+      : !session.stats[id] || !memberById[id] ? 'Missing player data'
+      : blockedInGamePlayers.has(id) || (!supplied.has(id) && inGamePlayers.has(id)) ? 'On court outside this search pool'
+      : !supplied.has(id) ? 'Outside this search pool'
+      : null
+    if (reason) search.excluded.push({ name: memberById[id]?.name ?? id, reason })
+  }
+  if (queueList.length < 4) return null
   const players = [...new Set(queueList)]
     .filter((id) =>
       arrivalOrder.has(id) && session.stats[id] && memberById[id]
@@ -957,6 +982,11 @@ const findCompatibleRoster = (
       const currentWait = getCurrentBenchWait(session, id, now, inGamePlayers.has(id))
       return {
         id,
+        name: memberById[id].name,
+        gamesPlayed: stats.gamesPlayed,
+        missedGames: stats.missedGames,
+        currentWait,
+        averageWait: stats.averageWaitMs ?? 0,
         totalGames: getTotalGames(stats),
         skill: getSkillLevel(id),
         waitingScore: calculateWaitingScore(currentWait, stats.averageWaitMs ?? 0),
@@ -964,12 +994,33 @@ const findCompatibleRoster = (
         arrivalOrder: arrivalOrder.get(id)!,
       }
     })
-  const pool = findSmartQueuePool(players, preferredBasePlayerId)
-  if (!pool) return []
+  search.players = Object.fromEntries(players.map((player) => [player.id, player]))
+  const pool = findSmartQueuePool(players, preferredBasePlayerId, {
+    onOrder: (ids) => { search.orderedIds = ids },
+    onLayer: (attempt) => { search.layers.push(attempt) },
+  })
+  if (!pool) return null
 
   const maxWaitingScore = players.reduce((max, player) => Math.max(max, player.waitingScore), 0)
-  const winner = selectSmartQueueArrangement(pool.base, pool.candidates, maxWaitingScore, buildPairingCounts(session.history))
-  return winner?.teams.flat().map(({ id }) => id) ?? []
+  const arrangements: ScoredArrangement[] = []
+  const winner = selectSmartQueueArrangement(
+    pool.base, pool.candidates, maxWaitingScore, buildPairingCounts(session.history),
+    ([[a, b], [c, d]], score) => {
+      arrangements.push({ teams: [[a.id, b.id], [c.id, d.id]], score })
+    },
+  )
+  if (!winner) return null
+  const winnerIds = winner.teams.flat().map(({ id }) => id)
+  const winnerIndex = arrangements.findIndex(({ teams }) =>
+    teams.flat().every((id, index) => id === winnerIds[index]),
+  )
+  return {
+    players: search.players,
+    searches, thresholds: compatibilityLayers, formula: { ...smartQueueFormula },
+    baseId: pool.base.id, preferredBaseId: preferredBasePlayerId, layer: pool.layer,
+    arrangements, winnerIndex,
+    reason: 'Highest composite score in the first successful layer. Exact ties go to the arrangement evaluated first.',
+  }
 }
 
   const balanceTeams = (
@@ -1170,6 +1221,12 @@ const findCompatibleRoster = (
     return bestRoster
   }
   const generateRoster = () => {
+    const id = createId()
+    const createdAt = new Date().toISOString()
+    const snapshotFields = (session: Session, playerIds: string[], detail: { scoring: AutomaticScoring } | { manualReason: string }) => {
+      const snapshot: ScoringSnapshot = { id, createdAt, playerNames: playerIds.map((id) => memberById[id]?.name ?? id), ...detail }
+      return [snapshot, ...(session.scoringSnapshots ?? [])].slice(0, scoringHistoryLimit)
+    }
     updateActiveSession((session) => {
       if (session.endedAt || session.matchmakingMode !== 'smart-queue') return session
       const queueList = buildQueueList(session)
@@ -1216,6 +1273,7 @@ const findCompatibleRoster = (
         return {
           ...session,
           rosters: updatedRosters,
+          ...(selectedPlayers.length === 4 ? { scoringSnapshots: snapshotFields(session, selectedPlayers, { manualReason: 'Completed an existing roster' }) } : {}),
         }
       }
       if (manualPickIds.length === 2) {
@@ -1236,22 +1294,23 @@ const findCompatibleRoster = (
 
         return {
           ...session,
+          scoringSnapshots: snapshotFields(session, selectedMatch, { manualReason: 'Manually selected teammates' }),
           rosters: [
             ...session.rosters,
             {
-              id: createId(),
+              id,
               playerIds: selectedMatch,
               baseOrder: selectedMatch,
               rotationIndex: 0,
-              createdAt: new Date().toISOString(),
+              createdAt,
             },
           ],
         }
       }
       if (manualPickIds.length > 1) return session
-      const selectedPlayers = buildMatchSet(session, queueList, manualPickIds[0])
+      const scoring = buildMatchSet(session, queueList, manualPickIds[0])
 
-      if (selectedPlayers.length < 4) {
+      if (!scoring) {
         toast.warning(
           'Not enough compatible players found.',
         )
@@ -1259,16 +1318,18 @@ const findCompatibleRoster = (
         return session
       }
 
+      const selectedPlayers = scoring.arrangements[scoring.winnerIndex].teams.flat()
       return {
         ...session,
+        scoringSnapshots: snapshotFields(session, selectedPlayers, { scoring }),
         rosters: [
           ...session.rosters,
           {
-            id: createId(),
+            id,
             playerIds: selectedPlayers,
             baseOrder: selectedPlayers, 
             rotationIndex: 0,
-            createdAt: new Date().toISOString(),
+            createdAt,
           },
         ],
       }
@@ -1327,19 +1388,28 @@ const findCompatibleRoster = (
 
   const queueManualRoster = () => {
     if (manualPickIds.length !== 4) return
+    const id = createId()
+    const createdAt = new Date().toISOString()
     updateActiveSession((session) => {
       if (session.endedAt) return session
-
+      const snapshot: ScoringSnapshot = {
+        id, createdAt,
+        playerNames: manualPickIds.map((id) => memberById[id]?.name ?? id),
+        manualReason: 'Manually selected four players',
+      }
       return {
         ...session,
+        ...(session.matchmakingMode === 'smart-queue' ? {
+          scoringSnapshots: [snapshot, ...(session.scoringSnapshots ?? [])].slice(0, scoringHistoryLimit),
+        } : {}),
         rosters: [
           ...session.rosters,
           {
-            id: createId(),
+            id,
             playerIds: manualPickIds,
             baseOrder: manualPickIds,
             rotationIndex: 0,
-            createdAt: new Date().toISOString(),
+            createdAt,
             
           },
         ],
@@ -1447,6 +1517,8 @@ const findCompatibleRoster = (
 
       const startedAt = Date.now()
       const waitingRecords = getCourtWaitingRecords(session, roster.playerIds, startedAt)
+      const preMatchWaiting = session.matchmakingMode === 'smart-queue'
+        ? snapshotCourtWaiting(session, roster.playerIds) : undefined
       const [a1, a2, b1, b2] = roster.playerIds
       return {
         ...session,
@@ -1463,6 +1535,7 @@ const findCompatibleRoster = (
                 scoreB: 0,
                 startedAt,
                 waitingRecords,
+                preMatchWaiting,
               }
             : c,
         ),
@@ -1633,11 +1706,12 @@ const findCompatibleRoster = (
       const target = session.courts.find((court) => court.id === courtId)
       if (!target || target.teamA.length === 0 || target.teamB.length === 0) return session
       
-      const { stats } = getFinishedCourtWait(session, target, Date.now())
+      const waiting = session.matchmakingMode === 'smart-queue'
+        ? rollbackCourtWaiting(session, target)
+        : { stats: getFinishedCourtWait(session, target, Date.now()).stats }
       return {
         ...session,
-        stats,
-        ...(session.matchmakingMode === 'smart-queue' ? clearLatePriority(session, [...target.teamA, ...target.teamB]) : {}),
+        ...waiting,
         winLoseStack:
           session.matchmakingMode === 'win-lose-stack' && target.stackPlayerSources
             ? restorePlayersToStacks(session.winLoseStack, target.stackPlayerSources)
@@ -1652,6 +1726,7 @@ const findCompatibleRoster = (
                 scoreB: 0,
                 startedAt: null,
                 waitingRecords: undefined,
+                preMatchWaiting: undefined,
               }
             : court,
         ),
@@ -1799,6 +1874,7 @@ const findCompatibleRoster = (
                 scoreB: 0,
                 startedAt: null,
                 waitingRecords: undefined,
+                preMatchWaiting: undefined,
                 stackPlayerSources: undefined,
               }
             : court,
