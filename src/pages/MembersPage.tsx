@@ -1,3 +1,4 @@
+import { getSimulationSpeed, isSimulationLocked } from '../lib/sessionClock'
 import { getEloRating } from '../lib/eloRatings'
 import { getSessionSkill, getSessionSkillLabel, skillBorderClass, skillColor } from '../lib/skillDisplay'
 import { useMemo, useState, type FormEvent } from 'react'
@@ -16,6 +17,7 @@ type MembersPageProps = {
   onAddVisitors: (names: string[], defaultSkill?: Skill) => void
   onEditVisitor: (visitorId: string, name: string, skill: Skill) => void
   onDeleteVisitor: (visitorId: string) => void
+  onSimulationSpeedChange: (speed: number) => void
   onStartQueue: () => void
   onEndQueue: (endedAt?: number) => void
   onEditSessionDetails: (name: string, matchmakingMode: MatchmakingMode) => void
@@ -47,7 +49,7 @@ const PlayIcon = () => (
 
 )
 
-export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying, onResign, onSetParticipant, onAddVisitors, onEditVisitor, onDeleteVisitor, onStartQueue, onEndQueue, onEditSessionDetails }: MembersPageProps) {
+export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying, onResign, onSetParticipant, onAddVisitors, onEditVisitor, onDeleteVisitor, onStartQueue, onEndQueue, onEditSessionDetails, onSimulationSpeedChange }: MembersPageProps) {
   const [visitorModalOpen, setVisitorModalOpen] = useState(false)
   const [clubMembersOpen, setClubMembersOpen] = useState(false)
   const [visitorText, setVisitorText] = useState('')
@@ -62,7 +64,7 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
   const isQueueEnded = Boolean(session.endedAt)
   const isQueueStarted = Boolean(session.startedAt)
   const isWinLoseStack = session.matchmakingMode === 'win-lose-stack'
-  const matchmakingModeLabel = isWinLoseStack ? 'Win/Lose Stacking' : session.matchmakingMode === 'elo-smart-queue' ? 'Elo Smart Queue' : 'Smart Queue'
+  const matchmakingModeLabel = isWinLoseStack ? 'Win/Lose Stacking' : session.matchmakingMode === 'elo-smart-queue' ? 'Elo Smart Queue' : session.matchmakingMode === 'testing-ground' ? 'Testing Ground' : 'Smart Queue'
   const hasActiveCourt = session.courts.some((court) => court.teamA.length > 0 || court.teamB.length > 0)
   const hasPendingQueue = session.rosters.length > 0
   const participantIds = session.participantIds ?? []
@@ -128,6 +130,27 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
               <span className="queue-session-member-count">{participantIds.length} participants</span>
             </div>
           </div>
+          {session.matchmakingMode === 'testing-ground' && (
+            <div className="simulation-speed-control">
+              <label>
+                Simulation Speed
+                <span className="simulation-speed-input">
+                  <select
+                    aria-label="Simulation Speed"
+                    value={getSimulationSpeed(session)}
+                    disabled={isSimulationLocked(session)}
+                    onChange={(event) => onSimulationSpeedChange(Number(event.target.value))}
+                  >
+                    {[...new Set([1, 10, 20, 30, 60, 120, getSimulationSpeed(session)])]
+                      .sort((a, b) => a - b)
+                      .map((speed) => <option key={speed} value={speed}>x{speed}</option>)}
+                  </select>
+                </span>
+              </label>
+              <small>TESTING ONLY · {isSimulationLocked(session) ? 'Speed locked' : 'Speed locks at queue start'}</small>
+              <small>At x{getSimulationSpeed(session)}, 30 seconds of real time equals {Number((getSimulationSpeed(session) / 2).toFixed(3))} minutes of simulated time.</small>
+            </div>
+          )}
           <div className="queue-session-header-actions">
             {!isQueueStarted && (
               <button
@@ -386,7 +409,7 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
       >
         <label className="field">
           One visitor per line
-          {session.matchmakingMode === 'smart-queue' && (
+          {(session.matchmakingMode === 'smart-queue' || session.matchmakingMode === 'testing-ground') && (
             <div className="bulk-help">
               Add a skill number after the name: 1-Newbie | 2-Beginner | 3-Low Intermediate | 4-Intermediate | 5-High Intermediate | 6-Advanced | 7-Elite. | No number defaults to Intermediate.
             </div>
@@ -395,7 +418,7 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
             className="bulk-textarea"
             value={visitorText}
             onChange={(event) => setVisitorText(event.target.value)}
-            placeholder={session.matchmakingMode !== 'smart-queue' ? 'Anthony\nBawaw\nJohn' : 'Anthony 3\nBawaw 5\nJohn'}
+            placeholder={session.matchmakingMode !== 'smart-queue' && session.matchmakingMode !== 'testing-ground' ? 'Anthony\nBawaw\nJohn' : 'Anthony 3\nBawaw 5\nJohn'}
             required
           />
         </label>
@@ -472,7 +495,7 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
             <button
               className="danger"
               onClick={() => {
-                onEndQueue(Date.now())
+                onEndQueue()
                 setEndQueueConfirmOpen(false)
               }}
             >

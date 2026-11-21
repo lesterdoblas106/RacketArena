@@ -31,6 +31,10 @@ mock.module('react', {
 mock.module('sonner', { namedExports: { toast: { warning() {} } } })
 const { useRacketArenaState } = await import('./useRacketArenaState.ts')
 const { getSessionSkill, getSessionSkillLabel, getRatingCategory, skillBorderClass, skillColor } = await import('../lib/skillDisplay.ts')
+const { getSessionNow, getSimulationSpeed, isSimulationLocked, configureSimulationSpeed } = await import('../lib/sessionClock.ts')
+const { getCurrentBenchWait } = await import('../lib/queueSession.ts')
+const { calculateWaitingScore } = await import('../lib/smartQueueScoring.ts')
+const { matchmakingModes } = await import('../lib/matchmakingModes.ts')
 resolver.deregister()
 
 const startedAt = 1000
@@ -575,7 +579,7 @@ test('Smart Queue keeps its manually assigned category, label and colors even wi
   assert.equal(getSessionSkillLabel(state.activeSession!, state.memberById.a), 'Beginner')
 })
 
-for (const mode of ['smart-queue', 'elo-smart-queue'] as const) {
+for (const mode of ['smart-queue', 'elo-smart-queue', 'testing-ground'] as const) {
   test(`${mode} includes compatible late players before optimizing waiting scores`, () => {
     mock.method(Date, 'now', () => 100000)
     const render = setup(ids.slice(0, 5), {
@@ -602,7 +606,7 @@ for (const mode of ['smart-queue', 'elo-smart-queue'] as const) {
     const render = setup(ids.slice(0, 5), {
       matchmakingMode: mode, priorityList: ['a', 'b'], playerList: ['c', 'd', 'e'], history,
     })
-    if (mode === 'smart-queue') render().editMember('b', 'b', 'Advanced')
+    if (mode !== 'elo-smart-queue') render().editMember('b', 'b', 'Advanced')
     // In Elo, a=2 and b=6. Give regular candidates the same rating as the base.
     // Their rating of 4 fits layer 2, while b requires layer 5.
     render().toggleManualPick('a')
@@ -613,6 +617,167 @@ for (const mode of ['smart-queue', 'elo-smart-queue'] as const) {
     assert.ok(session.priorityList.includes('b'))
     const snapshot = session.scoringSnapshots![0]
     assert.ok('scoring' in snapshot)
-    assert.equal(snapshot.scoring.layer, mode === 'smart-queue' ? 1 : 2)
+    assert.equal(snapshot.scoring.layer, mode === 'elo-smart-queue' ? 2 : 1)
+  })
+}
+
+test('Testing Ground is a selectable option with the requested testing-only description', () => {
+  assert.deepEqual(matchmakingModes.find(({ value }) => value === 'testing-ground'), {
+    value: 'testing-ground', label: 'Testing Ground',
+    description: 'Do NOT enter, this is for TESTING ONLY. Time moves fast here',
+  })
+})
+
+for (const speed of [1, 10, 30, 60]) {
+  test(`Testing Ground x${speed} accelerates waits, scores, court times and completed match duration`, () => {
+    let realNow = 100000
+    mock.method(Date, 'now', () => realNow)
+    const render = setup(ids.slice(0, 4), { matchmakingMode: 'testing-ground', startedAt: null })
+    assert.equal(getSimulationSpeed(render().activeSession!), 30)
+    render().setSimulationSpeed(speed)
+    render().startSession()
+    const initial = render().activeSession!
+    assert.equal(initial.simulation!.realAnchor, realNow)
+    assert.equal(initial.simulation!.speed, speed)
+    realNow += 30000
+    const virtualNow = 100000 + 30000 * speed
+    assert.equal(getSessionNow(render().activeSession!), virtualNow)
+    assert.equal(getCurrentBenchWait(render().activeSession!, 'a', virtualNow, false), 30000 * speed)
+    render().generateRoster()
+    const queued = render().activeSession!
+    const snapshot = queued.scoringSnapshots![0]
+    assert.ok('scoring' in snapshot)
+    assert.equal(snapshot.scoring.players.a.skill, 2) // predefined Beginner, not Elo 4.0
+    assert.equal(snapshot.scoring.players.a.currentWait, 30000 * speed)
+    assert.equal(snapshot.scoring.players.a.waitingScore, calculateWaitingScore(30000 * speed, 0))
+    assert.equal(new Date(queued.rosters[0].createdAt).getTime(), virtualNow)
+    render().assignToCourt(queued.rosters[0].id, 'one')
+    const active = render().activeSession!
+    assert.equal(active.courts[0].startedAt, virtualNow)
+    assert.equal(active.stats.a.totalWaitMs, 30000 * speed)
+    realNow += 30000
+    assert.equal(render().activeSession!.history.length, 0) // No automatic match completion.
+    assert.equal(getCurrentBenchWait(active, 'a', getSessionNow(active), true), 0)
+    render().endMatch('one', 21, 15)
+    const finished = render().activeSession!
+    assert.equal(finished.history[0].durationMs, 30000 * speed)
+    assert.equal(finished.history[0].endedAt, 100000 + 60000 * speed)
+    assert.equal(finished.history[0].eloAdjustment, undefined)
+    assert.equal(finished.stats.a.waitPeriods, 1)
+    assert.equal(finished.stats.a.waitingSince, 100000 + 60000 * speed)
+    assert.equal(finished.eloRatings, undefined)
+    assert.equal(render().memberById.a.skill, 'Beginner')
+  })
+}
+
+test('simulation speed rejects invalid values and is locked across mode edits, reload and end', () => {
+  mock.method(Date, 'now', () => 100000)
+  const render = setup(ids.slice(0, 4), { matchmakingMode: 'testing-ground', startedAt: null })
+  for (const invalid of [0, -1, NaN, Infinity]) render().setSimulationSpeed(invalid)
+  assert.equal(getSimulationSpeed(render().activeSession!), 30)
+  render().setSimulationSpeed(10)
+  render().setSimulationSpeed(0.5)
+  assert.equal(getSimulationSpeed(render().activeSession!), 0.5)
+  render().setSimulationSpeed(60)
+  render().startSession()
+  render().setSimulationSpeed(10)
+  render().editActiveSessionDetails('Changed', 'smart-queue')
+  render().editQueue('session', 'Changed', 'smart-queue')
+  assert.equal(getSimulationSpeed(render().activeSession!), 60)
+  assert.equal(render().activeSession!.matchmakingMode, 'testing-ground')
+  const current = render().activeSession!
+  const reload = setup(current.playingIds, current)
+  reload().setSimulationSpeed(1)
+  assert.equal(getSimulationSpeed(reload().activeSession!), 60)
+  reload().endSession()
+  reload().setSimulationSpeed(1)
+  assert.equal(getSimulationSpeed(reload().activeSession!), 60)
+  assert.ok(isSimulationLocked(reload().activeSession!))
+  assert.strictEqual(configureSimulationSpeed({ ...current, startedAt: null }, 1).simulation, current.simulation)
+})
+
+test('Testing Ground persisted anchors advance during browser closure without restarting or double acceleration', async () => {
+  let realNow = 100000
+  mock.method(Date, 'now', () => realNow)
+  const render = setup(ids.slice(0, 4), { matchmakingMode: 'testing-ground', startedAt: null })
+  render().setSimulationSpeed(30)
+  render().startSession()
+  realNow += 10000
+  render().generateRoster()
+  render().assignToCourt(render().activeSession!.rosters[0].id, 'one')
+  const active = render().activeSession!
+  const { saveState, loadState } = await import('../lib/storage.ts')
+  let saved = ''
+  Object.assign(storage, { setItem(_key: string, value: string) { saved = value } })
+  saveState({ members: Object.values(render().memberById), sessions: [active], activeSessionId: active.id })
+  mock.method(storage, 'getItem', () => saved)
+  realNow += 30000
+  const restored = loadState()!.sessions[0]
+  const reload = setup(restored.playingIds, restored)
+  assert.equal(getSessionNow(reload().activeSession!), 1300000)
+  reload().startSession()
+  assert.deepEqual(reload().activeSession!.simulation, active.simulation)
+  reload().endMatch('one', 21, 15)
+  assert.equal(reload().activeSession!.history[0].durationMs, 900000)
+  const again = reload().activeSession!
+  const secondReload = setup(again.playingIds, again)
+  assert.equal(getSessionNow(secondReload().activeSession!), 1300000)
+  secondReload().endSession()
+  const ended = secondReload().activeSession!
+  realNow += 30000
+  assert.equal(getSessionNow(ended), 1300000)
+  assert.equal(ended.endedAt! - ended.startedAt!, 1200000)
+})
+
+test('Testing Ground forfeits restore virtual waiting history and late priority, including after refresh', () => {
+  let realNow = 100000
+  mock.method(Date, 'now', () => realNow)
+  const render = setup(ids.slice(0, 4), { matchmakingMode: 'testing-ground', startedAt: null, priorityList: ['a'], playerList: ['b', 'c', 'd'] })
+  render().startSession()
+  const before = render().activeSession!
+  realNow += 10000
+  render().generateRoster()
+  render().assignToCourt(render().activeSession!.rosters[0].id, 'one')
+  const active = render().activeSession!
+  realNow += 20000
+  const reload = setup(active.playingIds, active)
+  reload().forfeitMatch('one')
+  const cancelled = reload().activeSession!
+  assert.deepEqual(cancelled.stats, before.stats)
+  assert.deepEqual(cancelled.priorityList, before.priorityList)
+  assert.equal(cancelled.history.length, 0)
+  assert.equal(getCurrentBenchWait(cancelled, 'a', getSessionNow(cancelled), false), 900000)
+  reload().endMatch('one', 21, 10)
+  assert.equal(reload().activeSession!.history.length, 0)
+})
+
+test('Testing Ground late arrivals use virtual timestamps with unchanged game compensation and priority selection', () => {
+  let realNow = 100000
+  mock.method(Date, 'now', () => realNow)
+  const render = setup(ids.slice(0, 4), { matchmakingMode: 'testing-ground', startedAt: null })
+  render().startSession()
+  render().generateRoster()
+  render().assignToCourt(render().activeSession!.rosters[0].id, 'one')
+  realNow += 30000
+  render().moveToPlaying('e')
+  render().moveToPlaying('f')
+  const arrived = render().activeSession!
+  assert.equal(arrived.stats.e.joinedAtTime, 1000000)
+  assert.equal(arrived.stats.e.waitingSince, 1000000)
+  assert.equal(arrived.stats.e.missedGames, 1)
+  assert.equal(arrived.stats.e.gamesPlayed, 0)
+  assert.deepEqual(arrived.priorityList, ['e', 'f'])
+  render().endMatch('one', 21, 15)
+  render().generateRoster()
+  assert.ok(render().activeSession!.rosters[0].playerIds.includes('e'))
+  assert.ok(render().activeSession!.rosters[0].playerIds.includes('f'))
+})
+
+for (const mode of ['smart-queue', 'elo-smart-queue', 'win-lose-stack'] as const) {
+  test(`${mode} keeps real time even if simulation fields are present`, () => {
+    const render = setup(ids.slice(0, 4), { matchmakingMode: mode, simulation: { speed: 60, realAnchor: 1000, virtualAnchor: 1000 } })
+    assert.equal(getSessionNow(render().activeSession!, 31000), 31000)
+    render().setSimulationSpeed(10)
+    assert.equal(render().activeSession!.simulation!.speed, 60)
   })
 }

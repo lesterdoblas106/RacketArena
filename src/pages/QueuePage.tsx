@@ -1,3 +1,4 @@
+import { getSessionNow, getSimulationSpeed } from '../lib/sessionClock'
 import { getSessionSkill, getSessionSkillLabel, skillBorderClass } from '../lib/skillDisplay'
 import { getEloRating, getQueueSkill } from '../lib/eloRatings'
 import { useEffect, useRef, useState } from 'react'
@@ -128,7 +129,7 @@ export function QueuePage({
   const [clock, setClock] = useState(() => Date.now())
   const isQueueEnded = Boolean(session.endedAt)
   const isQueueStarted = Boolean(session.startedAt)
-  const now = session.endedAt ?? clock
+  const now = getSessionNow(session, clock)
   const [resultModal, setResultModal] = useState<{
     courtId: string
     courtLabel: string
@@ -182,9 +183,10 @@ export function QueuePage({
   }
 
   useEffect(() => {
-    const timer = window.setInterval(() => setClock(Date.now()), 1000)
+    const interval = session.matchmakingMode === 'testing-ground' ? 250 : 1000
+    const timer = window.setInterval(() => setClock(Date.now()), interval)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [session.matchmakingMode])
 
   // const dateLabel = useMemo(() => {
   //   const now = new Date()
@@ -361,6 +363,9 @@ export function QueuePage({
     <>
     <section className="queue-layout">
       <article className="card courts-panel">
+        {session.matchmakingMode === 'testing-ground' && (
+          <p className="simulation-notice">Testing Ground · TESTING ONLY · x{getSimulationSpeed(session)}</p>
+        )}
         <header className="court-header">
           <div className="court-header-info">
             <h3 className="court-title">Courts</h3>

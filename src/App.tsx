@@ -71,6 +71,7 @@ function App() {
     shuffleStackTeams,
     exportSessionCSV,
     startSession,
+    setSimulationSpeed,
     endSession,
   } = useRacketArenaState()
   const [rankingSort, setRankingSort] = useState<'score'|'winRate' | 'games' | 'name' | 'skill'>(
@@ -203,6 +204,7 @@ function App() {
                     onEditVisitor={editVisitor}
                     onDeleteVisitor={deleteVisitor}
                     onStartQueue={startSession}
+                    onSimulationSpeedChange={setSimulationSpeed}
                     onEndQueue={endSession}
                     onEditSessionDetails={editActiveSessionDetails}
                   />

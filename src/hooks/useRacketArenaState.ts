@@ -1,3 +1,4 @@
+import { configureSimulationSpeed, defaultSimulationSpeed, getSessionNow, isSimulationLocked, startSimulationClock } from '../lib/sessionClock'
 import { getQueueSkill, isSmartQueueMode, reconcileEloRatings, eloRatingAdjustment, eloStartingRating } from '../lib/eloRatings'
 import { createId } from '../lib/createId'
 import { useEffect, useMemo, useState } from 'react'
@@ -134,15 +135,16 @@ export function useRacketArenaState() {
     })
   }, [members, sessions, resolvedActiveSessionId])
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setClock(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [])
-
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === resolvedActiveSessionId) ?? null,
     [sessions, resolvedActiveSessionId],
   )
+
+  useEffect(() => {
+    const interval = activeSession?.matchmakingMode === 'testing-ground' ? 250 : 1000
+    const timer = window.setInterval(() => setClock(Date.now()), interval)
+    return () => window.clearInterval(timer)
+  }, [activeSession?.matchmakingMode])
 
   const scoringSnapshots = activeSession?.scoringSnapshots
   useEffect(() => {
@@ -196,7 +198,7 @@ export function useRacketArenaState() {
             wins: 0,
             missedGames: 0,
             joinedAt: Object.keys(session.stats).length + 1,
-            waitingSince: Date.now(),
+            waitingSince: getSessionNow(session),
             totalWaitMs:0,
             waitPeriods:0,
             averageWaitMs: 0,
@@ -214,6 +216,7 @@ export function useRacketArenaState() {
         ...session,
         createdAt: queue.createdAt,
         matchmakingMode: queue.matchmakingMode ?? 'smart-queue',
+        ...(queue.matchmakingMode === 'testing-ground' ? { simulation: { speed: defaultSimulationSpeed } } : {}),
         ...(queue.matchmakingMode === 'elo-smart-queue' ? { eloRatings: Object.fromEntries(members.map(({ id }) => [id, eloStartingRating])) } : {}),
       },
       ...prev
@@ -228,7 +231,7 @@ export function useRacketArenaState() {
       toast.warning('This session has ended and can’t be edited.')
       return
     }
-    if (target.startedAt != null && target.matchmakingMode !== matchmakingMode) {
+    if (isSimulationLocked(target) && target.matchmakingMode !== matchmakingMode) {
       toast.warning('Matchmaking mode can’t be changed after the queue starts.')
       return
     }
@@ -242,13 +245,16 @@ export function useRacketArenaState() {
       if (session.matchmakingMode === matchmakingMode) {
         return { ...session, name: name.trim() }
       }
-      if (session.startedAt != null) return session
+      if (isSimulationLocked(session)) return session
 
       const inGame = new Set(session.courts.flatMap((court) => [...court.teamA, ...court.teamB]))
       return {
         ...session,
         name: name.trim(),
         matchmakingMode,
+        simulation: matchmakingMode === 'testing-ground'
+          ? session.simulation ?? { speed: defaultSimulationSpeed }
+          : session.simulation,
         ...(matchmakingMode === 'elo-smart-queue' ? { eloRatings: Object.fromEntries(Object.keys(session.stats).map(id => [id, eloStartingRating])) } : {}),
         rosters: [],
         winLoseStack: {
@@ -270,7 +276,7 @@ export function useRacketArenaState() {
   const editActiveSessionDetails = (name: string, matchmakingMode: MatchmakingMode) => {
     if (!name.trim()) return
     updateActiveSession((session) => {
-      if (session.startedAt) return session
+      if (isSimulationLocked(session)) return session
 
       const changedToStack = matchmakingMode === 'win-lose-stack' && session.matchmakingMode !== 'win-lose-stack'
       const knownStackPlayers = new Set([
@@ -283,6 +289,9 @@ export function useRacketArenaState() {
         ...session,
         name: name.trim(),
         matchmakingMode,
+        simulation: matchmakingMode === 'testing-ground'
+          ? session.simulation ?? { speed: defaultSimulationSpeed }
+          : session.simulation,
         winLoseStack: changedToStack
           ? {
               ...session.winLoseStack,
@@ -414,7 +423,7 @@ export function useRacketArenaState() {
         ...visitor,
         id: createId(),
       }))
-      const now = Date.now()
+      const now = getSessionNow(session)
       const stats = { ...session.stats }
       const nextJoinedAt = Object.keys(stats).length
       newVisitors.forEach((visitor, index) => {
@@ -490,7 +499,7 @@ export function useRacketArenaState() {
           ? memberStats.missedGames + additionalMissedGames
           : Math.max(memberStats.missedGames, additionalMissedGames)
 
-        const arrivedAt = Date.now()
+        const arrivedAt = getSessionNow(session)
         const updatedStats = {
           ...memberStats,
           missedGames,
@@ -598,7 +607,7 @@ export function useRacketArenaState() {
             ...session.stats,
             [memberId]: {
               ...session.stats[memberId],
-              waitingSince: Date.now(),
+              waitingSince: getSessionNow(session),
             },
           },
           winLoseStack:
@@ -642,7 +651,7 @@ export function useRacketArenaState() {
             ...session.stats,
             [memberId]: {
               ...session.stats[memberId],
-              waitingSince: Date.now(),
+              waitingSince: getSessionNow(session),
             },
           },
           winLoseStack:
@@ -890,7 +899,7 @@ export function useRacketArenaState() {
     const inGame = session.courts.some(({ teamA, teamB }) =>
       teamA.includes(memberId) || teamB.includes(memberId),
     )
-    return calculateWaitingScore(getCurrentBenchWait(session, memberId, clock, inGame), stats.averageWaitMs ?? 0)
+    return calculateWaitingScore(getCurrentBenchWait(session, memberId, getSessionNow(session, clock), inGame), stats.averageWaitMs ?? 0)
   }
 
 const buildMatchSet = (
@@ -964,7 +973,7 @@ const findCompatibleRoster = (
 ): AutomaticScoring | null => {
   const priority = new Set(session.priorityList)
   const arrivalOrder = new Map(session.playingIds.map((id, index) => [id, index]))
-  const now = Date.now()
+  const now = getSessionNow(session)
   const search: ScoringSearch = { label, players: {}, orderedIds: [], excluded: [], layers: [] }
   searches.push(search)
   const supplied = new Set(queueList)
@@ -1227,8 +1236,9 @@ const findCompatibleRoster = (
     return bestRoster
   }
   const generateRoster = () => {
+    if (!activeSession) return
     const id = createId()
-    const createdAt = new Date().toISOString()
+    const createdAt = new Date(getSessionNow(activeSession)).toISOString()
     const snapshotFields = (session: Session, playerIds: string[], detail: { scoring: AutomaticScoring } | { manualReason: string }) => {
       const snapshot: ScoringSnapshot = { id, createdAt, playerNames: playerIds.map((id) => memberById[id]?.name ?? id), ...detail }
       return [snapshot, ...(session.scoringSnapshots ?? [])].slice(0, scoringHistoryLimit)
@@ -1393,9 +1403,9 @@ const findCompatibleRoster = (
     })
 
   const queueManualRoster = () => {
-    if (manualPickIds.length !== 4) return
+    if (manualPickIds.length !== 4 || !activeSession) return
     const id = createId()
-    const createdAt = new Date().toISOString()
+    const createdAt = new Date(getSessionNow(activeSession)).toISOString()
     updateActiveSession((session) => {
       if (session.endedAt) return session
       const snapshot: ScoringSnapshot = {
@@ -1521,7 +1531,7 @@ const findCompatibleRoster = (
         return session
       }
 
-      const startedAt = Date.now()
+      const startedAt = getSessionNow(session)
       const waitingRecords = getCourtWaitingRecords(session, roster.playerIds, startedAt)
       const preMatchWaiting = isSmartQueueMode(session.matchmakingMode)
         ? snapshotCourtWaiting(session, roster.playerIds) : undefined
@@ -1661,7 +1671,7 @@ const findCompatibleRoster = (
         : { ...removePlayersFromStacks(session.winLoseStack, match.playerIds), playingNext: automatic!.playingNextAfter }
       const dispatchedIndex = manualMatch ? -1 : buildStackRotation(session.winLoseStack)
         .findIndex((item) => item.playerIds[0] === match.playerIds[0])
-      const startedAt = Date.now()
+      const startedAt = getSessionNow(session)
       const waitingRecords = getCourtWaitingRecords(session, match.playerIds, startedAt)
       const [first, second, third, fourth] = match.playerIds
       const teams = [
@@ -1714,7 +1724,7 @@ const findCompatibleRoster = (
       
       const waiting = isSmartQueueMode(session.matchmakingMode)
         ? rollbackCourtWaiting(session, target)
-        : { stats: getFinishedCourtWait(session, target, Date.now()).stats }
+        : { stats: getFinishedCourtWait(session, target, getSessionNow(session)).stats }
       return {
         ...session,
         ...waiting,
@@ -1808,7 +1818,7 @@ const findCompatibleRoster = (
           : matchResult === 'teamA'
             ? target.teamA
             : target.teamB
-      const endedAt = Date.now()
+      const endedAt = getSessionNow(session)
       const startedAt = target.startedAt ?? endedAt
       const matchPlayerIds = [...target.teamA, ...target.teamB]
       const { stats: updatedStats, waitingRecords } = getFinishedCourtWait(session, target, endedAt)
@@ -2344,7 +2354,7 @@ const shareSessionCSV = async (
 }
 */
 
-const endSession = (endedAt = Date.now()) =>
+const endSession = (requestedEndedAt?: number) =>
   updateActiveSession((session) => {
     if (session.endedAt) return session
     const hasActiveCourt = session.courts.some(
@@ -2358,6 +2368,7 @@ const endSession = (endedAt = Date.now()) =>
       return session
     }
 
+    const endedAt = requestedEndedAt ?? getSessionNow(session)
     const snapshot = buildSessionHistorySnapshot({
       ...session,
       endedAt,
@@ -2375,9 +2386,9 @@ const endSession = (endedAt = Date.now()) =>
 
 const startSession = () =>
   updateActiveSession((session) => {
-    if (session.startedAt || session.endedAt) return session
+    if (isSimulationLocked(session)) return session
 
-    const startedAt = Date.now()
+    const startedAt = getSessionNow(session)
     const updatedStats = { ...session.stats }
 
     for (const memberId of session.playingIds) {
@@ -2391,6 +2402,7 @@ const startSession = () =>
     return {
       ...session,
       startedAt,
+      simulation: startSimulationClock(session, startedAt),
       stats: updatedStats,
       winLoseStack:
         session.matchmakingMode === 'win-lose-stack'
@@ -2438,6 +2450,7 @@ const startSession = () =>
     createQueue,
     editQueue,
     editActiveSessionDetails,
+    setSimulationSpeed: (speed: number) => updateActiveSession(session => configureSimulationSpeed(session, speed)),
     deleteQueue,
     addMember,
     addMembersBulk,

@@ -1,23 +1,8 @@
+import { matchmakingModes } from '../lib/matchmakingModes'
 import { useId } from 'react'
 import type { MatchmakingMode } from '../types/app'
 
-const modes = [
-  {
-    value: 'smart-queue',
-    label: 'Smart Queue',
-    description: 'Builds balanced matches using skill, games played, and waiting time.',
-  },
-  {
-    value: 'elo-smart-queue',
-    label: 'Elo Smart Queue',
-    description: 'Uses Smart Queue with ratings starting at 4.0 and fixed win/loss adjustments.',
-  },
-  {
-    value: 'win-lose-stack',
-    label: 'Win/Lose Stack',
-    description: 'Rotates players through Winners and Losers queues based on match results.',
-  },
-] as const
+const modes = matchmakingModes
 
 type Props = {
   value: MatchmakingMode

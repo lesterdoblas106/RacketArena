@@ -15,7 +15,7 @@ export type Member = {
   skill: Skill
 }
 
-export type MatchmakingMode = 'smart-queue' | 'elo-smart-queue' | 'win-lose-stack'
+export type MatchmakingMode = 'smart-queue' | 'elo-smart-queue' | 'testing-ground' | 'win-lose-stack'
 export type StackType = 'unplayed' | 'winner' | 'loser' | 'returning'
 export type PlayingNext = 'winner' | 'loser'
 
@@ -106,6 +106,8 @@ export type MatchHistory = {
 }
 
 export type Session = {
+  /** Persisted virtual-clock anchors; only Testing Ground uses acceleration. */
+  simulation?: { speed: number; realAnchor?: number; virtualAnchor?: number }
   /** Session-specific ratings, separate from manual member skills. */
   eloRatings?: Record<string, number>
   /** Runtime only. Full scoring history is stored separately from session data. */

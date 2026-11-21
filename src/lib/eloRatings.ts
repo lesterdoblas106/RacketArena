@@ -4,7 +4,7 @@ export const eloStartingRating = 4
 export const eloRatingAdjustment = 0.5
 
 export const isSmartQueueMode = (mode: MatchmakingMode) =>
-  mode === 'smart-queue' || mode === 'elo-smart-queue'
+  mode === 'smart-queue' || mode === 'elo-smart-queue' || mode === 'testing-ground'
 
 export const getEloRating = (session: Session, id: string) =>
   session.eloRatings?.[id] ?? eloStartingRating
