@@ -221,6 +221,13 @@ export function HistoryPage({
                 </div>
               )}
             </div>
+            {game.eloAdjustment !== undefined && !isEditing && (
+              <p>
+                Elo rating change per player: {game.result === 'draw'
+                  ? '0 (draw)'
+                  : `winning team +${game.eloAdjustment}, losing team −${game.eloAdjustment}`}
+              </p>
+            )}
             {isEditing && (
               <div className="history-edit-actions">
                 <button className="secondary small" onClick={shuffleTeams}><Shuffle size={15} /> Shuffle teams</button>

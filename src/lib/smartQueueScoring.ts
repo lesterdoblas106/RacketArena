@@ -1,5 +1,6 @@
 export type SmartQueuePlayer = {
   id: string
+  latePriority?: boolean
   totalGames: number
   skill: number
   waitingScore: number
@@ -11,8 +12,8 @@ export type Doubles<T> = readonly [Pair<T>, Pair<T>]
 export const smartQueueWeights = {
   game: 0.15,
   waiting: 0.30,
-  skill: 0.20,
-  team: 0.20,
+  skill: 0.25,
+  team: 0.15,
   teammate: 0.10,
   opponent: 0.05,
 } as const
@@ -113,11 +114,16 @@ export function selectSmartQueueArrangement(
   onEvaluated?: (teams: Doubles<SmartQueuePlayer>, score: ReturnType<typeof scoreSmartQueueArrangement>) => void,
 ) {
   let best: { teams: Doubles<SmartQueuePlayer>; total: number } | undefined
+  // The pool already passed the first successful compatibility layer. Reserve
+  // the remaining seats for eligible priority players in the pool's queue order.
+  const requiredIds = candidates.filter((player) => player.latePriority)
+    .slice(0, 3).map(({ id }) => id)
 
   for (let i = 0; i < candidates.length - 2; i++) {
     for (let j = i + 1; j < candidates.length - 1; j++) {
       for (let k = j + 1; k < candidates.length; k++) {
         const [b, c, d] = [candidates[i], candidates[j], candidates[k]]
+        if (!requiredIds.every((id) => [b, c, d].some((player) => player.id === id))) continue
         const arrangements: Doubles<SmartQueuePlayer>[] = [
           [[base, b], [c, d]],
           [[base, c], [b, d]],

@@ -1,3 +1,4 @@
+import { getSessionSkill, getSessionSkillLabel, skillBorderClass } from '../lib/skillDisplay'
 import { TrophyIcon } from '@heroicons/react/24/outline'
 import type { Member, Session, Skill } from '../types/app'
 
@@ -11,16 +12,6 @@ type RankingPageProps = {
   skillFilter: Skill | 'all'
   onSkillFilter: (value: Skill | 'all') => void
 }
-const skillBorderClass = (skill: Member['skill']) =>
-  ({
-    Newbie: 'skill-newbie',
-    Beginner: 'skill-beginner',
-    'Low Intermediate': 'skill-low-intermediate',
-    Intermediate: 'skill-intermediate',
-    'High Intermediate': 'skill-high-intermediate',
-    Advanced: 'skill-advanced',
-    Elite: 'skill-elite',
-  })[skill]
 
 export function RankingPage({
   session,
@@ -46,13 +37,13 @@ export function RankingPage({
       return { id, member, stats, winRate, score, points, losses, arrivedAt }
     })
     .filter((entry) => entry.stats.gamesPlayed > 0) 
-    .filter((entry) => (skillFilter === 'all' ? true : entry.member.skill === skillFilter))
+    .filter((entry) => (skillFilter === 'all' ? true : getSessionSkill(session, entry.member) === skillFilter))
     .sort((a, b) => {
       if (sortBy === 'name') return a.member.name.localeCompare(b.member.name)
       if (sortBy === 'games') return b.stats.gamesPlayed - a.stats.gamesPlayed
       if (sortBy === 'skill') {
         return (
-          a.member.skill.localeCompare(b.member.skill) ||
+          getSessionSkill(session, a.member).localeCompare(getSessionSkill(session, b.member)) ||
           b.score - a.score ||
           b.points - a.points ||
           a.arrivedAt - b.arrivedAt ||
@@ -124,7 +115,7 @@ export function RankingPage({
               return (
                 <tr
                   key={entry.id}
-                  className={`leaderboard-row ${index < 3 ? `leaderboard-podium leaderboard-place-${index + 1}` : ''} ${session.matchmakingMode === 'win-lose-stack' ? '' : skillBorderClass(entry.member.skill)}`}
+                  className={`leaderboard-row ${index < 3 ? `leaderboard-podium leaderboard-place-${index + 1}` : ''} ${session.matchmakingMode === 'win-lose-stack' ? '' : skillBorderClass(getSessionSkill(session, entry.member))}`}
                 >
                   <td className="leaderboard-rank">
                     {index === 0
@@ -137,7 +128,7 @@ export function RankingPage({
                   </td>
 
                   <td className="leaderboard-player">
-                    <strong>{entry.member.name}</strong>
+                    <strong title={getSessionSkillLabel(session, entry.member)}>{entry.member.name}</strong>
                   </td>
                   <td><strong>{entry.points} pts</strong></td>
                   <td>{entry.winRate.toFixed(1)}%</td>

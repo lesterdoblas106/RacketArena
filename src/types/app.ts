@@ -15,7 +15,7 @@ export type Member = {
   skill: Skill
 }
 
-export type MatchmakingMode = 'smart-queue' | 'win-lose-stack'
+export type MatchmakingMode = 'smart-queue' | 'elo-smart-queue' | 'win-lose-stack'
 export type StackType = 'unplayed' | 'winner' | 'loser' | 'returning'
 export type PlayingNext = 'winner' | 'loser'
 
@@ -90,6 +90,8 @@ export type MatchWaitingRecord = {
 }
 
 export type MatchHistory = {
+  /** Fixed step recorded only for officially completed Elo matches. */
+  eloAdjustment?: number
   id: string
   courtLabel: string
   teamA: string[]
@@ -104,6 +106,8 @@ export type MatchHistory = {
 }
 
 export type Session = {
+  /** Session-specific ratings, separate from manual member skills. */
+  eloRatings?: Record<string, number>
   /** Runtime only. Full scoring history is stored separately from session data. */
   scoringSnapshots?: ScoringSnapshot[]
   id: string

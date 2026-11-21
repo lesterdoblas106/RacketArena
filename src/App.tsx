@@ -174,7 +174,10 @@ function App() {
                   clubMemberSort={clubMemberSort}
                   onChangeQueueSort={setClubQueueSort}
                   onChangeMemberSort={setClubMemberSort}
-                  onCreateQueue={createQueue}
+                  onCreateQueue={(queue) => {
+                    const sessionId = createQueue(queue)
+                    if (sessionId) handleOpenSession(sessionId)
+                  }}
                   onOpenSession={handleOpenSession}
                   onEditQueue={editQueue}
                   onDeleteQueue={handleDeleteQueue}

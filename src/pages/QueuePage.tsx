@@ -1,3 +1,5 @@
+import { getSessionSkill, getSessionSkillLabel, skillBorderClass } from '../lib/skillDisplay'
+import { getEloRating, getQueueSkill } from '../lib/eloRatings'
 import { useEffect, useRef, useState } from 'react'
 import { Modal } from '../components/Modal'
 import type { Member, MemberStats, Session } from '../types/app'
@@ -65,7 +67,6 @@ export function QueuePage({
   onReplaceRosterPlayer,
   onToggleManualPick,
   getSessionPlayerStatus,
-  skillScore,
   onShuffleRoster,
   buildQueueList,
   onAssignStackMatchToCourt,
@@ -77,6 +78,7 @@ export function QueuePage({
   onShuffleStackTeams,
 }: QueuePageProps) {
   const queuePanelRef = useRef<HTMLElement>(null)
+  const [drawConfirmationOpen, setDrawConfirmationOpen] = useState(false)
 
   useEffect(() => {
     const panel = queuePanelRef.current
@@ -153,16 +155,6 @@ export function QueuePage({
     teamB:string[]
   } | null>(null)
 
-  const skillBorderClass = (skill: Member['skill']) =>
-    ({
-      Newbie: 'skill-newbie',
-      Beginner: 'skill-beginner',
-      'Low Intermediate': 'skill-low-intermediate',
-      Intermediate: 'skill-intermediate',
-      'High Intermediate': 'skill-high-intermediate',
-      Advanced: 'skill-advanced',
-      Elite: 'skill-elite',
-    })[skill]
 
   const getVacantCourts = () => {
     return session.courts.filter(
@@ -263,7 +255,7 @@ export function QueuePage({
         return total
       }
 
-      return total + skillScore(member.skill) + 1
+      return total + getQueueSkill(session, member)
     }, 0)
 
   const getCurrentWaitMs = (id: string) =>
@@ -331,12 +323,7 @@ export function QueuePage({
 
       if (playersSort === 'skill') {
         return (
-          skillScore(
-            memberById[b.id].skill,
-          ) -
-          skillScore(
-            memberById[a.id].skill,
-          )
+          getQueueSkill(session, memberById[b.id]) - getQueueSkill(session, memberById[a.id])
         )
       }
 
@@ -575,7 +562,7 @@ export function QueuePage({
                       </button>
                     ))}
                   </div>
-                  <span className="team-skill-total" title="Team skill total">
+                  <span className="team-skill-total" title={session.matchmakingMode === 'elo-smart-queue' ? 'Team Elo rating total' : 'Team skill total'}>
                     {getTeamSkillTotal(teamAIds)}
                   </span>
                 </div>
@@ -599,7 +586,7 @@ export function QueuePage({
                       </button>
                     ))}
                   </div>
-                  <span className="team-skill-total" title="Team skill total">
+                  <span className="team-skill-total" title={session.matchmakingMode === 'elo-smart-queue' ? 'Team Elo rating total' : 'Team skill total'}>
                     {getTeamSkillTotal(teamBIds)}
                   </span>
                 </div>
@@ -659,7 +646,7 @@ export function QueuePage({
               <option value="waitingTime">Waiting Time</option>
               <option value="name">Name</option>
               <option value="totalGames">Total Games</option>
-              <option value="skill">Skill Level</option>
+              <option value="skill">{session.matchmakingMode === 'elo-smart-queue' ? 'Elo Rating' : 'Skill Level'}</option>
             </select>
           </div>
 
@@ -707,7 +694,7 @@ export function QueuePage({
             return (
               <button
                 key={memberId}
-                className={`row row-table row-skill queue-player-card ${status} ${manualPickClass} ${skillBorderClass(memberById[memberId].skill)}`}
+                className={`row row-table row-skill queue-player-card ${status} ${manualPickClass} ${skillBorderClass(getSessionSkill(session, memberById[memberId]))}`}
                 disabled={isQueueEnded || status === 'queueing'}
                 onClick={() => {
                   if (status !== 'queueing') {
@@ -717,8 +704,8 @@ export function QueuePage({
               >
                 <div className="queue-player-top">
                   <strong>
-                    {memberById[memberId].name} - S
-                    {getSkillScore(memberById[memberId].skill)}
+                    {memberById[memberId].name} - {session.matchmakingMode === 'elo-smart-queue' ? '' : 'S'}
+                    {session.matchmakingMode === 'elo-smart-queue' ? getEloRating(session, memberId).toFixed(1) : getSkillScore(memberById[memberId].skill)}
                   </strong>
 
                   <span className="queue-player-score">
@@ -805,7 +792,7 @@ export function QueuePage({
               <>
               <span className="replace-player-info">
                 <span
-                  className={`skill-dot ${skillBorderClass(memberById[memberId].skill)}`}
+                  className={`skill-dot ${skillBorderClass(getSessionSkill(session, memberById[memberId]))}`}
                 />
 
                 <span className="replace-player-name">
@@ -814,7 +801,7 @@ export function QueuePage({
               </span>
 
               <span className="replace-player-skill">
-                {memberById[memberId]?.skill ?? ''}
+                {memberById[memberId] ? getSessionSkillLabel(session, memberById[memberId]) : ''}
               </span>
             </>
               </button>
@@ -823,7 +810,7 @@ export function QueuePage({
       </Modal>
 
       <Modal
-        open={Boolean(resultModal)}
+        open={Boolean(resultModal) && !drawConfirmationOpen}
         title="Game Result"
         onClose={() => setResultModal(null)}
         footer={
@@ -833,6 +820,10 @@ export function QueuePage({
               className="primary"
               onClick={() => {
                 if (!resultModal) return
+                if (resultModal.scoreA === resultModal.scoreB) {
+                  setDrawConfirmationOpen(true)
+                  return
+                }
                 onEndMatch(resultModal.courtId, resultModal.scoreA, resultModal.scoreB)
                 setResultModal(null)
               }}
@@ -998,6 +989,30 @@ export function QueuePage({
 
           </div>
         )}
+      </Modal>
+
+      <Modal
+        open={Boolean(resultModal) && drawConfirmationOpen}
+        title="Confirm Draw"
+        onClose={() => setDrawConfirmationOpen(false)}
+        footer={
+          <>
+            <button onClick={() => setDrawConfirmationOpen(false)}>No</button>
+            <button
+              className="primary"
+              onClick={() => {
+                if (!resultModal) return
+                onEndMatch(resultModal.courtId, resultModal.scoreA, resultModal.scoreB)
+                setDrawConfirmationOpen(false)
+                setResultModal(null)
+              }}
+            >
+              Yes
+            </button>
+          </>
+        }
+      >
+        <p>Are you sure this match is a Draw?</p>
       </Modal>
 
       <Modal

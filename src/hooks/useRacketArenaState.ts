@@ -1,3 +1,4 @@
+import { getQueueSkill, isSmartQueueMode, reconcileEloRatings, eloRatingAdjustment, eloStartingRating } from '../lib/eloRatings'
 import { createId } from '../lib/createId'
 import { useEffect, useMemo, useState } from 'react'
 import { loadState, saveState } from '../lib/storage'
@@ -93,7 +94,7 @@ export function useRacketArenaState() {
             startedAt: court.startedAt ?? null,
           })),
           }
-          return migrated
+          return reconcileEloRatings(migrated)
         }),
       }
     }
@@ -207,14 +208,17 @@ export function useRacketArenaState() {
 
   const createQueue = (queue: { name: string, createdAt: string, matchmakingMode?: MatchmakingMode }) => {
     if (!queue.name.trim()) return
+    const session = createSession(queue.name.trim(), members)
     setSessions((prev) => [
       { 
-        ...createSession(queue.name.trim(), members),
+        ...session,
         createdAt: queue.createdAt,
         matchmakingMode: queue.matchmakingMode ?? 'smart-queue',
+        ...(queue.matchmakingMode === 'elo-smart-queue' ? { eloRatings: Object.fromEntries(members.map(({ id }) => [id, eloStartingRating])) } : {}),
       },
       ...prev
     ])
+    return session.id
   }
 
   const editQueue = (queueId: string, name: string, matchmakingMode: MatchmakingMode) => {
@@ -245,6 +249,7 @@ export function useRacketArenaState() {
         ...session,
         name: name.trim(),
         matchmakingMode,
+        ...(matchmakingMode === 'elo-smart-queue' ? { eloRatings: Object.fromEntries(Object.keys(session.stats).map(id => [id, eloStartingRating])) } : {}),
         rosters: [],
         winLoseStack: {
           unplayed: matchmakingMode === 'win-lose-stack'
@@ -372,7 +377,7 @@ export function useRacketArenaState() {
   const updateActiveSession = (updater: (session: Session) => Session) => {
     if (!activeSessionId) return
     setSessions((prev) =>
-      prev.map((session) => (session.id === activeSessionId ? updater(session) : session)),
+      prev.map((session) => (session.id === activeSessionId ? reconcileEloRatings(updater(session)) : session)),
     )
   }
 
@@ -481,7 +486,7 @@ export function useRacketArenaState() {
         const memberStats = session.stats[memberId]
 
         const additionalMissedGames = getAdditionalMissedGames(session, memberStats)
-        const missedGames = session.matchmakingMode === 'smart-queue'
+        const missedGames = isSmartQueueMode(session.matchmakingMode)
           ? memberStats.missedGames + additionalMissedGames
           : Math.max(memberStats.missedGames, additionalMissedGames)
 
@@ -495,7 +500,7 @@ export function useRacketArenaState() {
           joinedAtTime: memberStats.joinedAtTime ?? arrivedAt,
         }
 
-        const shouldPrioritize = session.matchmakingMode === 'smart-queue'
+        const shouldPrioritize = isSmartQueueMode(session.matchmakingMode)
           ? additionalMissedGames > 0
           : missedGames > 0
         const isReturning = memberStats.gamesPlayed > 0
@@ -504,6 +509,7 @@ export function useRacketArenaState() {
           ...session,
 
           playingIds: [...session.playingIds, memberId],
+          ...(session.matchmakingMode === 'elo-smart-queue' ? { eloRatings: { ...session.eloRatings, [memberId]: session.eloRatings?.[memberId] ?? eloStartingRating } } : {}),
 
           participantIds: session.participantIds.includes(memberId)
             ? session.participantIds
@@ -653,7 +659,7 @@ export function useRacketArenaState() {
   }
 
   const getSkillLevel = (memberId: string) => {
-    return skillOrder.indexOf(memberById[memberId].skill) + 1
+    return activeSession ? getQueueSkill(activeSession, memberById[memberId]) : skillOrder.indexOf(memberById[memberId].skill) + 1
   }
       
   const getTeammateCount = (
@@ -988,7 +994,7 @@ const findCompatibleRoster = (
         currentWait,
         averageWait: stats.averageWaitMs ?? 0,
         totalGames: getTotalGames(stats),
-        skill: getSkillLevel(id),
+        skill: getQueueSkill(session, memberById[id]),
         waitingScore: calculateWaitingScore(currentWait, stats.averageWaitMs ?? 0),
         latePriority: priority.has(id),
         arrivalOrder: arrivalOrder.get(id)!,
@@ -1019,7 +1025,7 @@ const findCompatibleRoster = (
     searches, thresholds: compatibilityLayers, formula: { ...smartQueueFormula },
     baseId: pool.base.id, preferredBaseId: preferredBasePlayerId, layer: pool.layer,
     arrangements, winnerIndex,
-    reason: 'Highest composite score in the first successful layer. Exact ties go to the arrangement evaluated first.',
+    reason: 'Uses the first successful compatibility layer, reserves available places for eligible Late Priority players in queue order, then selects the highest composite score. Exact ties go to the arrangement evaluated first.',
   }
 }
 
@@ -1228,7 +1234,7 @@ const findCompatibleRoster = (
       return [snapshot, ...(session.scoringSnapshots ?? [])].slice(0, scoringHistoryLimit)
     }
     updateActiveSession((session) => {
-      if (session.endedAt || session.matchmakingMode !== 'smart-queue') return session
+      if (session.endedAt || !isSmartQueueMode(session.matchmakingMode)) return session
       const queueList = buildQueueList(session)
 
       const incompleteRosterIndex =
@@ -1399,7 +1405,7 @@ const findCompatibleRoster = (
       }
       return {
         ...session,
-        ...(session.matchmakingMode === 'smart-queue' ? {
+        ...(isSmartQueueMode(session.matchmakingMode) ? {
           scoringSnapshots: [snapshot, ...(session.scoringSnapshots ?? [])].slice(0, scoringHistoryLimit),
         } : {}),
         rosters: [
@@ -1517,7 +1523,7 @@ const findCompatibleRoster = (
 
       const startedAt = Date.now()
       const waitingRecords = getCourtWaitingRecords(session, roster.playerIds, startedAt)
-      const preMatchWaiting = session.matchmakingMode === 'smart-queue'
+      const preMatchWaiting = isSmartQueueMode(session.matchmakingMode)
         ? snapshotCourtWaiting(session, roster.playerIds) : undefined
       const [a1, a2, b1, b2] = roster.playerIds
       return {
@@ -1706,7 +1712,7 @@ const findCompatibleRoster = (
       const target = session.courts.find((court) => court.id === courtId)
       if (!target || target.teamA.length === 0 || target.teamB.length === 0) return session
       
-      const waiting = session.matchmakingMode === 'smart-queue'
+      const waiting = isSmartQueueMode(session.matchmakingMode)
         ? rollbackCourtWaiting(session, target)
         : { stats: getFinishedCourtWait(session, target, Date.now()).stats }
       return {
@@ -1839,7 +1845,7 @@ const findCompatibleRoster = (
         
         ...session,
         stats: updatedStats,
-        ...(session.matchmakingMode === 'smart-queue'
+        ...(isSmartQueueMode(session.matchmakingMode)
           ? clearLatePriority(session, matchPlayerIds)
           : {}),
         winLoseStack:
@@ -1849,6 +1855,7 @@ const findCompatibleRoster = (
         history: [
           {
             id: createId(),
+            ...(session.matchmakingMode === 'elo-smart-queue' ? { eloAdjustment: eloRatingAdjustment } : {}),
             courtLabel:
               target.name ??
               `Court ${session.courts.findIndex((c) => c.id === courtId) + 1}`,
@@ -1905,7 +1912,7 @@ const findCompatibleRoster = (
         case 'wins':
           return bStats.wins - aStats.wins
         case 'skill':
-          return skillOrder.indexOf(bMember.skill) - skillOrder.indexOf(aMember.skill)
+          return getQueueSkill(activeSession, bMember) - getQueueSkill(activeSession, aMember)
         case 'name':
           return aMember.name.localeCompare(bMember.name)
         case 'queue': {

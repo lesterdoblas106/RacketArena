@@ -216,7 +216,7 @@ export function ClubPage({
                   >
                     {session.name}
                     <span className="club-queue-mode-label">
-                      {session.matchmakingMode === 'win-lose-stack' ? 'Win/Lose Stacking' : 'Smart Queue'}
+                      {session.matchmakingMode === 'win-lose-stack' ? 'Win/Lose Stacking' : session.matchmakingMode === 'elo-smart-queue' ? 'Elo Smart Queue' : 'Smart Queue'}
                     </span>
                     {session.endedAt && (
                       <span className="club-queue-ended-label">

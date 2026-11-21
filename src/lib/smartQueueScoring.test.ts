@@ -89,3 +89,19 @@ test('compares later combinations by composite score even when their game gap is
   const winner = selectSmartQueueArrangement(players[0], players.slice(1), 100, counts)
   assert.ok(winner?.teams.flat().some(({ id }) => id === 'e'))
 })
+
+test('eligible late priority reserves a seat despite a shorter waiting score', () => {
+  const base = { ...a, totalGames: 0, skill: 4, waitingScore: 10, latePriority: true }
+  const late = { ...base, id: 'late', waitingScore: 0 }
+  const regular = ['r1', 'r2', 'r3'].map(id => ({ ...base, id, waitingScore: 1000, latePriority: false }))
+  const winner = selectSmartQueueArrangement(base, [late, ...regular], 1000, buildPairingCounts([]))!
+  assert.ok(winner.teams.flat().some(({ id }) => id === 'late'))
+  assert.equal(late.waitingScore, 0)
+})
+
+test('excess eligible priority players keep pool queue order and leave remaining players for later', () => {
+  const base = { ...a, latePriority: true }
+  const candidates = ['first', 'second', 'third', 'fourth'].map((id, i) => ({ ...a, id, latePriority: true, waitingScore: i * 100 }))
+  const winner = selectSmartQueueArrangement(base, candidates, 300, buildPairingCounts([]))!
+  assert.deepEqual(winner.teams.flat().map(({ id }) => id).sort(), ['a', 'first', 'second', 'third'])
+})

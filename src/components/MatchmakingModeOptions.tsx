@@ -8,6 +8,11 @@ const modes = [
     description: 'Builds balanced matches using skill, games played, and waiting time.',
   },
   {
+    value: 'elo-smart-queue',
+    label: 'Elo Smart Queue',
+    description: 'Uses Smart Queue with ratings starting at 4.0 and fixed win/loss adjustments.',
+  },
+  {
     value: 'win-lose-stack',
     label: 'Win/Lose Stack',
     description: 'Rotates players through Winners and Losers queues based on match results.',
@@ -22,9 +27,11 @@ type Props = {
 
 export function MatchmakingModeOptions({ value, onChange, disabled }: Props) {
   const groupId = useId()
+  const selectedMode = modes.find((mode) => mode.value === value)
+  const descriptionId = `${groupId}-description`
 
   return (
-    <fieldset className="matchmaking-mode-options" disabled={disabled}>
+    <fieldset className="matchmaking-mode-options" disabled={disabled} aria-describedby={descriptionId}>
       <legend>Matchmaking Mode</legend>
       {modes.map((mode) => {
         const optionId = `${groupId}-${mode.value}`
@@ -37,15 +44,14 @@ export function MatchmakingModeOptions({ value, onChange, disabled }: Props) {
               checked={value === mode.value}
               onChange={() => onChange(mode.value)}
               aria-labelledby={`${optionId}-label`}
-              aria-describedby={`${optionId}-description`}
             />
-            <span>
-              <strong id={`${optionId}-label`}>{mode.label}</strong>
-              <small id={`${optionId}-description`}>{mode.description}</small>
-            </span>
+            <span id={`${optionId}-label`}>{mode.label}</span>
           </label>
         )
       })}
+      <p id={descriptionId} className="matchmaking-mode-description" aria-live="polite">
+        {selectedMode?.description}
+      </p>
     </fieldset>
   )
 }

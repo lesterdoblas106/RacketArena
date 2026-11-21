@@ -1051,17 +1051,15 @@ cursor: pointer;
 
 .matchmaking-mode-option {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid rgba(46, 168, 255, 0.28);
-  border-radius: 12px;
+  padding: 6px 0;
   cursor: pointer;
 }
 
 .matchmaking-mode-option:has(input:checked) {
-  border-color: var(--color-accent);
-  background: #f0f8ff;
+  color: var(--color-primary);
+  font-weight: 700;
 }
 
 .matchmaking-mode-option:has(input:disabled) {
@@ -1073,7 +1071,7 @@ cursor: pointer;
   width: 1rem;
   height: 1rem;
   min-height: 0;
-  margin: 0.2rem 0 0;
+  margin: 0;
   padding: 0;
   border-radius: 50%;
   color-scheme: light;
@@ -1085,10 +1083,14 @@ cursor: pointer;
   outline-offset: 2px;
 }
 
-.matchmaking-mode-option small {
-  display: block;
-  margin-top: 3px;
+.matchmaking-mode-description {
+  margin: 4px 0 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f0f8ff;
   color: var(--color-text-soft);
+  font-size: 0.9rem;
+  line-height: 1.5;
 }
 
 /* Bulk add help */

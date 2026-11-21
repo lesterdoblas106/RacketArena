@@ -1,3 +1,5 @@
+import { getEloRating } from '../lib/eloRatings'
+import { getSessionSkill, getSessionSkillLabel, skillBorderClass, skillColor } from '../lib/skillDisplay'
 import { useMemo, useState, type FormEvent } from 'react'
 import { Modal, ModalForm } from '../components/Modal'
 import { MatchmakingModeOptions } from '../components/MatchmakingModeOptions'
@@ -19,27 +21,7 @@ type MembersPageProps = {
   onEditSessionDetails: (name: string, matchmakingMode: MatchmakingMode) => void
 }
 
-const skillBorderClass = (skill: Member['skill']) =>
-  ({
-    Newbie: 'skill-newbie',
-    Beginner: 'skill-beginner',
-    'Low Intermediate': 'skill-low-intermediate',
-    Intermediate: 'skill-intermediate',
-    'High Intermediate': 'skill-high-intermediate',
-    Advanced: 'skill-advanced',
-    Elite: 'skill-elite',
-  })[skill]
 
-const skillColor = (skill: Skill) =>
-  ({
-    Newbie: '#d1d5db',
-    Beginner: '#fde047',
-    'Low Intermediate': '#22c55e',
-    Intermediate: '#3b82f6',
-    'High Intermediate': '#8b5cf6',
-    Advanced: '#ef4444',
-    Elite: '#111827',
-  })[skill]
 
 const PlayerActionIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" style={{ width: '15px', height: '15px' }}>
@@ -80,7 +62,7 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
   const isQueueEnded = Boolean(session.endedAt)
   const isQueueStarted = Boolean(session.startedAt)
   const isWinLoseStack = session.matchmakingMode === 'win-lose-stack'
-  const matchmakingModeLabel = isWinLoseStack ? 'Win/Lose Stacking' : 'Smart Queue'
+  const matchmakingModeLabel = isWinLoseStack ? 'Win/Lose Stacking' : session.matchmakingMode === 'elo-smart-queue' ? 'Elo Smart Queue' : 'Smart Queue'
   const hasActiveCourt = session.courts.some((court) => court.teamA.length > 0 || court.teamB.length > 0)
   const hasPendingQueue = session.rosters.length > 0
   const participantIds = session.participantIds ?? []
@@ -223,7 +205,7 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
               const status = statusFor(memberId)
               const isPlaying = session.playingIds.includes(memberId)
               const isResting = !isPlaying && (session.stats[memberId]?.gamesPlayed ?? 0) > 0
-              const skillClass = isWinLoseStack ? '' : `row-skill ${skillBorderClass(member.skill)}`
+              const skillClass = isWinLoseStack ? '' : `row-skill ${skillBorderClass(getSessionSkill(session, member))}`
               const rowStatus = isPlaying ? 'participant-playing' : isResting ? 'participant-resting' : ''
               const badgeStatus = isPlaying
                 ? 'participant-status-playing'
@@ -237,8 +219,8 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
                     <strong>{member.name}</strong>
                     <div className="compact-player-meta">
                       {!isWinLoseStack && (
-                        <span className="compact-skill" style={{ color: skillColor(member.skill) }}>
-                          {member.skill}
+                        <span className="compact-skill" style={{ color: skillColor(getSessionSkill(session, member)) }}>
+                          {session.matchmakingMode === 'elo-smart-queue' ? `Elo ${getEloRating(session, member.id).toFixed(1)}` : getSessionSkillLabel(session, member)}
                         </span>
                       )}
                       <span className={`compact-stats participant-status ${badgeStatus}`}>
@@ -287,7 +269,7 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
             {visitors.map((visitor) => {
               const isEditing = editingVisitor?.id === visitor.id
               return (
-                <div key={visitor.id} className={`club-member-card ${isWinLoseStack ? '' : skillBorderClass(visitor.skill)}`}>
+                <div key={visitor.id} className={`club-member-card ${isWinLoseStack ? '' : skillBorderClass(getSessionSkill(session, visitor))}`}>
                   <div className="club-member-info">
                     {isEditing ? (
                       <>
@@ -314,8 +296,8 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
                       <>
                         <p className="club-member-name">{visitor.name}</p>
                         {!isWinLoseStack && (
-                          <p className="club-member-skill" style={{ color: skillColor(visitor.skill) }}>
-                            {visitor.skill}
+                          <p className="club-member-skill" style={{ color: skillColor(getSessionSkill(session, visitor)) }}>
+                            {session.matchmakingMode === 'elo-smart-queue' ? `Elo ${getEloRating(session, visitor.id).toFixed(1)}` : getSessionSkillLabel(session, visitor)}
                           </p>
                         )}
                       </>
@@ -366,7 +348,7 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
           {clubMemberIds.map((memberId) => {
             const member = memberById[memberId]
             const selected = participantIds.includes(memberId)
-            const skillClass = isWinLoseStack ? '' : `row-skill ${skillBorderClass(member.skill)}`
+            const skillClass = isWinLoseStack ? '' : `row-skill ${skillBorderClass(getSessionSkill(session, member))}`
             const rowStatus = selected ? 'participant-playing' : ''
 
             return (
@@ -375,8 +357,8 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
                   <strong>{member.name}</strong>
                   <div className="compact-player-meta">
                     {!isWinLoseStack && (
-                      <span className="compact-skill" style={{ color: skillColor(member.skill) }}>
-                        {member.skill}
+                      <span className="compact-skill" style={{ color: skillColor(getSessionSkill(session, member)) }}>
+                        {session.matchmakingMode === 'elo-smart-queue' ? `Elo ${getEloRating(session, member.id).toFixed(1)}` : getSessionSkillLabel(session, member)}
                       </span>
                     )}
                   </div>
@@ -404,7 +386,7 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
       >
         <label className="field">
           One visitor per line
-          {!isWinLoseStack && (
+          {session.matchmakingMode === 'smart-queue' && (
             <div className="bulk-help">
               Add a skill number after the name: 1-Newbie | 2-Beginner | 3-Low Intermediate | 4-Intermediate | 5-High Intermediate | 6-Advanced | 7-Elite. | No number defaults to Intermediate.
             </div>
@@ -413,7 +395,7 @@ export function MembersPage({ session, memberById, clubMembers, onMoveToPlaying,
             className="bulk-textarea"
             value={visitorText}
             onChange={(event) => setVisitorText(event.target.value)}
-            placeholder={isWinLoseStack ? 'Anthony\nBawaw\nJohn' : 'Anthony 3\nBawaw 5\nJohn'}
+            placeholder={session.matchmakingMode !== 'smart-queue' ? 'Anthony\nBawaw\nJohn' : 'Anthony 3\nBawaw 5\nJohn'}
             required
           />
         </label>

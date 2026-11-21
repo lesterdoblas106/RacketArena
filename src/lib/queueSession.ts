@@ -1,3 +1,4 @@
+import { isSmartQueueMode } from './eloRatings'
 import type { Court, MatchWaitingRecord, MemberStats, Session } from '../types/app'
 
 export function getTotalGames(stats: MemberStats) {
@@ -7,7 +8,7 @@ export function getTotalGames(stats: MemberStats) {
 export function getAdditionalMissedGames(session: Session, member: MemberStats) {
   const inGame = new Set(session.courts.flatMap((court) => [...court.teamA, ...court.teamB]))
   const present = session.playingIds
-    .filter((id) => session.matchmakingMode === 'smart-queue' || !session.priorityList.includes(id))
+    .filter((id) => isSmartQueueMode(session.matchmakingMode) || !session.priorityList.includes(id))
     // An active match already gives this player a turn, even before it finishes.
     .map((id) => getTotalGames(session.stats[id]) + (inGame.has(id) ? 1 : 0))
   return present.length ? Math.max(0, Math.min(...present) - getTotalGames(member)) : 0
