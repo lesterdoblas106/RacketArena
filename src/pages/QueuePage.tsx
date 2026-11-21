@@ -1103,7 +1103,13 @@ export function QueuePage({
         <p>This will immediately end the current match.</p>
       </Modal>
     </section>
-    <MatchScoringInspector key={session.id} sessionId={session.id} snapshots={session.scoringSnapshots} />
+    {import.meta.env.DEV && (
+      <MatchScoringInspector
+        key={session.id}
+        sessionId={session.id}
+        snapshots={session.scoringSnapshots}
+      />
+    )}
     </>
       
   )
