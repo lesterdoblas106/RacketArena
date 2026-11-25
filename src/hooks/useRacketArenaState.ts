@@ -100,11 +100,17 @@ export function useRacketArenaState() {
     }
     return {
       members: seedMembers,
+      clubName: '',
       sessions: [createSession('Mpact Sundays', seedMembers)],
       activeSessionId: null as string | null,
     }
   })
 
+  const [clubName, setClubName] = useState(initial.clubName ?? '')
+  const renameClub = (name: string) => {
+    const trimmed = name.trim()
+    if (trimmed && trimmed.length <= 80) setClubName(trimmed)
+  }
   const [members, setMembers] = useState(initial.members)
   const [sessions, setSessions] = useState<Session[]>(initial.sessions)
   const [activeSessionId, setActiveSessionId] = useState<string | null>(
@@ -128,11 +134,12 @@ export function useRacketArenaState() {
 
   useEffect(() => {
     saveState({
+      clubName,
       members,
       sessions,
       activeSessionId: resolvedActiveSessionId,
     })
-  }, [members, sessions, resolvedActiveSessionId])
+  }, [clubName, members, sessions, resolvedActiveSessionId])
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 1000)
@@ -2421,6 +2428,8 @@ const startSession = () =>
 
   return {
     activeSession,
+    clubName,
+    renameClub,
     memberById,
     queuesForClub,
     sortedClubMembers,

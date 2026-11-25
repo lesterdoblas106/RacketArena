@@ -44,7 +44,6 @@ type QueuePageProps = {
   onSkipStackPlayer: (playerId: string) => void
   onCreateStackManualMatch: () => void
   onDissolveStackManualMatch: (matchId: string) => void
-  onSetStackPlayingNext: (value: 'winner' | 'loser') => void
   onShuffleStackTeams: () => void
 }
 
@@ -74,7 +73,6 @@ export function QueuePage({
   onSkipStackPlayer,
   onCreateStackManualMatch,
   onDissolveStackManualMatch,
-  onSetStackPlayingNext,
   onShuffleStackTeams,
 }: QueuePageProps) {
   const queuePanelRef = useRef<HTMLElement>(null)
@@ -117,7 +115,6 @@ export function QueuePage({
       onAssignMatch={onAssignStackMatchToCourt}
       onPrioritizeMatch={onPrioritizeStackMatch}
       onSkipPlayer={onSkipStackPlayer}
-      onSetPlayingNext={onSetStackPlayingNext}
       onShuffleTeams={onShuffleStackTeams}
       onAddCourt={onAddCourt}
       onRemoveCourt={onRemoveCourt}

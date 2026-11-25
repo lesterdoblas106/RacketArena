@@ -3,20 +3,29 @@ import { InformationCircleIcon } from '@heroicons/react/24/solid'
 
 type TopBarProps = {
   title: string
+  onEditClub?: () => void
   pageLabel: string
+  sessionName?: string
   showHome: boolean
   onHome: () => void
   onInfo?: () => void
 }
 
-export function TopBar({ title, pageLabel, showHome, onHome, onInfo }: TopBarProps) {
+export function TopBar({ title, pageLabel, sessionName, showHome, onHome, onInfo, onEditClub }: TopBarProps) {
   return (
     <header className="topbar">
       <div className="topbar-brand">
         <img src="/logo.png" alt="" className="topbar-logo" />
         <div className="topbar-title-group">
-          <span className="topbar-page">{pageLabel}</span>
-          <h2>{title}</h2>
+          <div className="topbar-club-name">
+            <h2 title={title}>{title}</h2>
+            {onEditClub && <button className="topbar-edit-btn" onClick={onEditClub} aria-label="Rename club" title="Rename club">
+              <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="m16 3 5 5L8 21H3v-5L16 3Z M13 6l5 5" />
+              </svg>
+            </button>}
+          </div>
+          {sessionName && <span className="topbar-page" title={sessionName}>{sessionName}</span>}
         </div>
       </div>
 

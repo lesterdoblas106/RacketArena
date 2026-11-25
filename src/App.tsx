@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import './App.css'
 import { BottomNav } from './components/BottomNav'
-// import { Modal } from './components/Modal'
+import { ModalForm } from './components/Modal'
 import { TopBar } from './components/TopBar'
 import { useRacketArenaState } from './hooks/useRacketArenaState'
 import { ClubPage } from './pages/ClubPage'
@@ -21,6 +21,8 @@ const TOURS_ENABLED = false
 function App() {
   const {
     activeSession,
+    clubName,
+    renameClub,
     memberById,
     queuesForClub,
     sortedClubMembers,
@@ -67,7 +69,6 @@ function App() {
     shuffleRoster,
     buildQueueList,
     forfeitMatch,
-    setStackPlayingNext,
     shuffleStackTeams,
     exportSessionCSV,
     startSession,
@@ -77,6 +78,8 @@ function App() {
     'score',
   )
   const [rankingSkillFilter, setRankingSkillFilter] = useState<Skill | 'all'>('all')
+  const [editClubOpen, setEditClubOpen] = useState(false)
+  const [clubNameDraft, setClubNameDraft] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
   const [showFirstRunTour, setShowFirstRunTour] = useState(() => {
     if (!TOURS_ENABLED) return false
@@ -102,11 +105,13 @@ function App() {
   }
 
   const currentPage = getCurrentPage()
+  const isSessionPage = ['members', 'queue', 'ranking', 'history', 'payment'].includes(currentPage)
+  const sessionContext = isSessionPage ? activeSession : null
   const showHome = currentPage !== 'club' && currentPage !== 'landing'
   
   const topBarPageLabel =
     {
-      club: 'Club',
+      club: 'Dashboard',
       members: 'Attendance',
       queue: 'Queue',
       ranking: 'Ranking',
@@ -151,8 +156,13 @@ function App() {
     <>
       {currentPage !== 'landing' && (
         <TopBar
-          title={activeSession?.name ?? 'Racket Arena'}
+          title={clubName || 'Your club'}
+          onEditClub={currentPage === 'club' ? () => {
+            setClubNameDraft(clubName)
+            setEditClubOpen(true)
+          } : undefined}
           pageLabel={topBarPageLabel}
+          sessionName={sessionContext?.name}
           showHome={showHome}
           onHome={() => navigate('/club')}
           onInfo={TOURS_ENABLED ? () => setHelpOpen(true) : undefined}
@@ -241,7 +251,6 @@ function App() {
                     onShuffleRoster={shuffleRoster}
                     buildQueueList={buildQueueList}
                     forfeitMatch={forfeitMatch}
-                    onSetStackPlayingNext={setStackPlayingNext}
                     onShuffleStackTeams={shuffleStackTeams}
                   />
                 ) : (
@@ -300,9 +309,39 @@ function App() {
         </main>
       )}
 
-      {activeSession && currentPage !== 'landing' && (
+      {sessionContext && (
         <BottomNav page={currentPage} onSelect={handleNavSelect} />
       )}
+
+      <ModalForm
+        open={currentPage !== 'landing' && (!clubName || editClubOpen)}
+        title={clubName ? 'Rename club' : 'Name your club'}
+        onClose={() => {
+          setEditClubOpen(false)
+          if (!clubName) navigate('/')
+        }}
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (!clubNameDraft.trim()) return
+          renameClub(clubNameDraft)
+          setEditClubOpen(false)
+        }}
+        submitLabel={clubName ? 'Save' : 'Continue'}
+        fitMobileKeyboard
+      >
+        {clubName && <p>This name appears across your club and game sessions.</p>}
+        <label className="club-form-field">
+          <span>Club name</span>
+          <input
+            autoFocus
+            required
+            maxLength={80}
+            placeholder="e.g. Racket Arena"
+            value={clubNameDraft}
+            onChange={(event) => setClubNameDraft(event.target.value)}
+          />
+        </label>
+      </ModalForm>
 
       {/* <Modal
         open={helpOpen}

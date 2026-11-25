@@ -62,6 +62,41 @@ function setup(playingIds = ids.slice(0, 4), overrides: Partial<Session> = {}) {
 
 test.afterEach(() => mock.restoreAll())
 
+test('legacy clubs can be named and renamed without changing sessions or members', () => {
+  const render = setup()
+  const before = render()
+  assert.equal(before.clubName, '')
+  before.renameClub('  Sunday Shuttlers  ')
+  const named = render()
+  assert.equal(named.clubName, 'Sunday Shuttlers')
+  assert.deepEqual(named.queuesForClub, before.queuesForClub)
+  assert.deepEqual(named.sortedClubMembers, before.sortedClubMembers)
+  named.renameClub('   ')
+  assert.equal(render().clubName, 'Sunday Shuttlers')
+  render().renameClub('x'.repeat(81))
+  assert.equal(render().clubName, 'Sunday Shuttlers')
+  render().renameClub('Evening Shuttlers')
+  assert.equal(render().clubName, 'Evening Shuttlers')
+})
+
+test('club name survives storage alongside existing session data', async () => {
+  const { loadState, saveState } = await import('../lib/storage.ts')
+  const render = setup()
+  const state = render()
+  let saved = ''
+  Object.defineProperty(storage, 'setItem', { configurable: true, value: (_key: string, value: string) => { saved = value } })
+  try {
+    saveState({ clubName: 'Sunday Shuttlers', members: state.sortedClubMembers, sessions: state.queuesForClub, activeSessionId: state.activeSession!.id })
+    mock.method(storage, 'getItem', () => saved)
+    const restored = loadState()!
+    assert.equal(restored.clubName, 'Sunday Shuttlers')
+    assert.equal(restored.sessions[0].id, state.activeSession!.id)
+    assert.deepEqual(restored.members, state.sortedClubMembers)
+  } finally {
+    Reflect.deleteProperty(storage, 'setItem')
+  }
+})
+
 test('automatic generation preserves its team split through dispatch and records wait only once', () => {
   mock.method(Date, 'now', () => 2000)
   const render = setup(ids.slice(0, 4), {

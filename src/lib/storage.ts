@@ -3,6 +3,7 @@ import type { Member, Session } from '../types/app'
 const STORAGE_KEY = 'racket-arena-state-v1'
 
 export type PersistedState = {
+  clubName?: string
   members: Member[]
   sessions: Session[]
   activeSessionId: string | null
@@ -15,6 +16,7 @@ export const loadState = (): PersistedState | null => {
     const parsed = JSON.parse(raw) as Partial<PersistedState>
     if (!parsed.members || !parsed.sessions) return null
     return {
+      clubName: typeof parsed.clubName === 'string' ? parsed.clubName.trim().slice(0, 80) : '',
       members: parsed.members,
       sessions: parsed.sessions,
       activeSessionId: parsed.activeSessionId ?? null,

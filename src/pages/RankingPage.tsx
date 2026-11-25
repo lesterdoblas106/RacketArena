@@ -62,8 +62,7 @@ export function RankingPage({
           <TrophyIcon width={21} height={21} />
         </span>
         <div className="ranking-header-title">
-          <h3>Ranking</h3>
-          <p>Session leaderboard</p>
+          <h3>Leaderboard</h3>
         </div>
         <span className="ranking-header-count">
           {rankedMembers.length} {rankedMembers.length === 1 ? 'player' : 'players'}

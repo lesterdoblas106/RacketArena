@@ -21,7 +21,6 @@ type Props = {
   onAssignMatch: (id: string | null, courtId: string, playerIds: string[]) => void
   onPrioritizeMatch: (playerIds: string[]) => void
   onSkipPlayer: (playerId: string) => void
-  onSetPlayingNext: (value: 'winner' | 'loser') => void
   onShuffleTeams: () => void
   onAddCourt: () => void
   onRemoveCourt: (id: string) => void
@@ -46,7 +45,6 @@ export function WinLoseStackView({
   onAssignMatch,
   onPrioritizeMatch,
   onSkipPlayer,
-  onSetPlayingNext,
   onShuffleTeams,
   onAddCourt,
   onRemoveCourt,
@@ -128,8 +126,8 @@ export function WinLoseStackView({
       <>
         <span>{memberById[id]?.name ?? 'Unknown'}</span>
         <span className="stack-player-stats">
-          W:{stats?.wins ?? 0} L:
-          {(stats?.gamesPlayed ?? 0) - (stats?.wins ?? 0)} <Timer size={13} />{' '}
+          W {stats?.wins ?? 0} · L{' '}
+          {(stats?.gamesPlayed ?? 0) - (stats?.wins ?? 0)} · <Timer size={13} />{' '}
           {formatWait(id)}
         </span>
       </>
@@ -161,16 +159,18 @@ export function WinLoseStackView({
       <header>
         <strong>Match {index + 1}</strong>
         {match.manual && <span className="stack-manual-badge">MANUAL</span>}
-        {match.complete && (
+        {match.complete && (index === 0 ? (
+          <span className="stack-next-badge">Next</span>
+        ) : (
           <button
             type="button"
             className="ghost small"
-            disabled={isEnded || index === 0}
+            disabled={isEnded}
             onClick={() => onPrioritizeMatch(match.playerIds)}
           >
-            {index === 0 ? 'Next Match' : 'Prioritize'}
+            Prioritize
           </button>
-        )}
+        ))}
       </header>
       <div className="stack-match-players">
         {match.playerIds.map((id) =>
@@ -289,19 +289,6 @@ export function WinLoseStackView({
       <article className="card stack-next-card">
         <header>
           <h3>Next Match</h3>
-          <label>
-            Playing Next{' '}
-            <select
-              value={session.winLoseStack.playingNext}
-              disabled={isEnded}
-              onChange={(e) =>
-                onSetPlayingNext(e.target.value as 'winner' | 'loser')
-              }
-            >
-              <option value="winner">Winners</option>
-              <option value="loser">Losers</option>
-            </select>
-          </label>
         </header>
         {next?.complete &&
           (() => {
@@ -373,10 +360,7 @@ export function WinLoseStackView({
       </article>
       <article className="card stack-rotation-card">
         <header>
-          <div>
-            <h3>Stacking</h3>
-            <p>Upcoming matches</p>
-          </div>
+          <h3>Stacking</h3>
           <div className="stack-legend">
             <span className="stack-unplayed">Unplayed</span>
             <span className="stack-winner">Winner</span>

@@ -24,14 +24,14 @@ const NAV_ITEMS = [
     icon: QueueListIcon,
   },
   {
-    page: 'ranking',
-    label: 'Ranking',
-    icon: TrophyIcon,
-  },
-  {
     page: 'history',
     label: 'History',
     icon: DocumentTextIcon,
+  },
+  {
+    page: 'ranking',
+    label: 'Ranking',
+    icon: TrophyIcon,
   },
   {
     page: 'payment',
@@ -42,7 +42,7 @@ const NAV_ITEMS = [
 
 export function BottomNav({ page, onSelect }: BottomNavProps) {
   return (
-    <nav className="bottom-nav">
+    <nav className="bottom-nav" aria-label="Game session">
       {NAV_ITEMS.map((item) => {
         const Icon = item.icon
         const active = page === item.page
@@ -50,6 +50,8 @@ export function BottomNav({ page, onSelect }: BottomNavProps) {
         return (
           <button
             key={item.page}
+            aria-label={item.label}
+            aria-current={active ? 'page' : undefined}
             className={`bottom-nav-item ${
               active ? 'bottom-nav-item-active' : ''
             }`}
@@ -60,10 +62,10 @@ export function BottomNav({ page, onSelect }: BottomNavProps) {
                 active ? 'bottom-nav-icon-active' : ''
               }`}
             >
-              <Icon />
+              <Icon aria-hidden="true" />
             </span>
 
-            <span className="bottom-nav-label">
+            <span className="bottom-nav-label" aria-hidden="true">
               {item.label}
             </span>
           </button>
